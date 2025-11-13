@@ -1,73 +1,96 @@
 'use strict';
 const express = require('express');
-const StorageService = require('../utils/storage');
+const { MAGIStorage } = require('@miroqu369/magi-stg');
 const YahooFinanceCollector = require('../collectors/yahoo-finance');
-const Analytics = require('../bigquery/analytics');
-const ExternalTablesManager = require('../bigquery/external-tables');
+const CompanyIntelligence = require('../collectors/company-intelligence');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 8888;
 
 app.use(express.json());
 
-const storage = new StorageService();
+// MAGI Storage 初期化（projectId を明示）
+const storage = new MAGIStorage({
+  bucketName: 'magi-ac-data',
+  datasetId: 'magi_ac',
+  projectId: 'screen-share-459802'  // ← GCP Project ID
+});
+
 const collector = new YahooFinanceCollector();
-const analytics = new Analytics();
+const intelligence = new CompanyIntelligence();
 
 // Health Check
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
-    version: '3.1.0',
-    service: 'MAGI Analytics Center',
+    version: '3.5.0-with-magi-stg',
+    service: 'MAGI Analytics Center (Powered by magi-stg)',
     timestamp: new Date().toISOString()
   });
 });
 
-// 分析API
+// 単一分析
 app.post('/api/analyze', async (req, res) => {
   try {
     const { symbol } = req.body;
     if (!symbol) return res.status(400).json({ error: 'symbol required' });
 
-    const quoteData = await collector.getQuote(symbol.toUpperCase());
-    if (!quoteData) return res.status(404).json({ error: 'Quote not found' });
+    const quote = await collector.getQuote(symbol.toUpperCase());
+    if (!quote) return res.status(404).json({ error: 'Quote not found' });
 
-    // Cloud Storageに保存
-    try {
-      const path = `raw/financials/${Date.now()}-${symbol}.json`;
-      await storage.save(quoteData, path);
-    } catch (e) {
-      console.log('Storage save (non-fatal):', e.message);
-    }
+    await storage.save(quote, {
+      type: 'json',
+      path: `analyses/${symbol}/${new Date().toISOString()}.json`
+    });
 
-    res.json(quoteData);
+    res.json(quote);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// BigQuery Analytics
-app.get('/api/analytics/latest/:symbol', async (req, res) => {
-  const latest = await analytics.getLatestPrice(req.params.symbol.toUpperCase());
-  res.json(latest || { error: 'No data' });
+// 最新データ
+app.get('/api/latest/:symbol', async (req, res) => {
+  try {
+    const data = await storage.fetch({
+      source: 'bigquery',
+      symbol: req.params.symbol.toUpperCase()
+    });
+    res.json(data || { error: 'No data' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
-app.get('/api/analytics/history/:symbol', async (req, res) => {
-  const days = parseInt(req.query.days) || 30;
-  const history = await analytics.getPriceHistory(req.params.symbol.toUpperCase(), days);
-  res.json({ symbol: req.params.symbol.toUpperCase(), days, history });
+// 履歴
+app.get('/api/history/:symbol', async (req, res) => {
+  try {
+    const days = parseInt(req.query.days) || 30;
+    const data = await storage.history(req.params.symbol.toUpperCase(), days);
+    res.json({ symbol: req.params.symbol.toUpperCase(), days, data });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
-app.get('/api/analytics/stats/:symbol', async (req, res) => {
-  const stats = await analytics.getSymbolStats(req.params.symbol.toUpperCase());
-  res.json(stats || { error: 'No data' });
+// 統計
+app.get('/api/stats/:symbol', async (req, res) => {
+  try {
+    const stats = await storage.stats(req.params.symbol.toUpperCase());
+    res.json(stats || { error: 'No stats' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log('🚀 MAGI Analytics Center v3.1 on port ' + PORT);
-  console.log('📊 Components: BigQuery + Cloud Storage + Yahoo Finance');
-  
-  const tables = new ExternalTablesManager();
-  tables.setupFinancialsTable();
+// Server 起動
+storage.initialize().then(() => {
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log('🚀 MAGI Analytics Center v3.5 (with magi-stg)');
+    console.log(`📊 Powered by @miroqu369/magi-stg`);
+    console.log(`🔌 Listening on port ${PORT}`);
+  });
+}).catch(error => {
+  console.error('❌ Initialization error:', error);
+  process.exit(1);
 });
