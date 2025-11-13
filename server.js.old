@@ -1,0 +1,52 @@
+'use strict';
+const express = require('express');
+const multer = require('multer');
+const fs = require('fs').promises;
+const YahooFinanceCollector = require('./collectors/yahoo-finance');
+const WebCrawler = require('./crawlers/web-crawler');
+const MagiClient = require('./analyzers/magi-client');
+const GrokSummarizer = require('./analyzers/grok-summarizer');
+
+const app = express();
+const PORT = process.env.PORT || 8888;
+const upload = multer({ dest: '/tmp/uploads/', limits: { fileSize: 10485760 } });
+
+app.use(express.json());
+app.use(express.static('public'));
+
+const yahooCollector = new YahooFinanceCollector();
+const webCrawler = new WebCrawler();
+const magiClient = new MagiClient(process.env.MAGI_URL, process.env.MAGI_TOKEN);
+const grokSummarizer = new GrokSummarizer();
+let analysisHistory = [];
+
+app.get('/health', (req, res) => {
+  res.json({ status: 'healthy', service: 'magi-ac', version: '2.0.0' });
+});
+
+app.post('/api/analyze', async (req, res) => {
+  try {
+    const { symbol } = req.body;
+    if (!symbol) return res.status(400).json({ error: 'Symbol required' });
+    
+    const financialData = await yahooCollector.getQuote(symbol.toUpperCase());
+    const prompt = magiClient.buildAnalysisPrompt(symbol, financialData);
+    const magiResult = await magiClient.analyze(prompt, 'integration');
+    
+    const result = {
+      symbol: symbol.toUpperCase(),
+      company: financialData.company,
+      financialData,
+      analysis: magiResult,
+      timestamp: new Date().toISOString()
+    };
+    
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 MAGI-AC v2.0 on port ${PORT}`);
+});

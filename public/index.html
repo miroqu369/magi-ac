@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>MAGI Analysis Center (MAGI-AC) v2.1</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: Arial; background: #f5f5f5; padding: 20px; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .header { background: white; padding: 24px; border-radius: 8px; margin-bottom: 20px; text-align: center; }
+        .card { background: white; padding: 24px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        input { flex: 1; padding: 12px; font-size: 16px; border: 1px solid #ddd; border-radius: 4px; }
+        button { padding: 12px 24px; font-size: 16px; background: #007bff; color: white; border: none; cursor: pointer; border-radius: 4px; }
+        button:hover { background: #0056b3; }
+        .loading { display: none; text-align: center; padding: 40px; }
+        .loading.show { display: block; }
+        .result { display: none; }
+        .result.show { display: block; }
+        .ai-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 20px; }
+        .ai-card { padding: 16px; border-radius: 8px; text-align: center; }
+        .ai-card.BUY { background: #d4edda; border: 2px solid #28a745; }
+        .ai-card.HOLD { background: #fff3cd; border: 2px solid #ffc107; }
+        .ai-card.SELL { background: #f8d7da; border: 2px solid #dc3545; }
+        .ai-name { font-weight: bold; font-size: 18px; margin-bottom: 8px; }
+        .ai-action { font-size: 24px; font-weight: bold; margin: 12px 0; }
+        .ai-confidence { font-size: 16px; color: #666; }
+        .chart-container { margin-top: 30px; max-width: 600px; margin-left: auto; margin-right: auto; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📊 MAGI Analysis Center (MAGI-AC) v2.1</h1>
+            <p>AI-Powered Stock Analysis with Confidence Visualization</p>
+        </div>
+
+        <div class="card">
+            <div style="display: flex; gap: 10px;">
+                <input type="text" id="symbol" placeholder="ティッカー (例: AAPL, GOOGL)" />
+                <button onclick="analyze()">分析開始</button>
+            </div>
+            
+            <div class="loading" id="loading">
+                <p>🤖 3つのAIが分析中...</p>
+            </div>
+
+            <div class="result" id="result">
+                <h2 id="companyName"></h2>
+                
+                <h3 style="margin-top: 20px;">各AIの投資判断</h3>
+                <div class="ai-cards" id="aiCards"></div>
+
+                <div class="chart-container">
+                    <canvas id="confidenceChart"></canvas>
+                </div>
+
+                <div style="margin-top: 30px; padding: 20px; background: #e7f3ff; border-radius: 8px;">
+                    <h3>📋 総合分析</h3>
+                    <div id="analysis"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let chartInstance = null;
+
+        async function analyze() {
+            const symbol = document.getElementById('symbol').value.trim().toUpperCase();
+            if (!symbol) { alert('ティッカーを入力してください'); return; }
+
+            document.getElementById('loading').classList.add('show');
+            document.getElementById('result').classList.remove('show');
+
+            try {
+                const res = await fetch('/api/analyze', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ symbol })
+                });
+
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error);
+
+                displayResults(data);
+                document.getElementById('result').classList.add('show');
+
+            } catch (error) {
+                alert('エラー: ' + error.message);
+            } finally {
+                document.getElementById('loading').classList.remove('show');
+            }
+        }
+
+        function displayResults(data) {
+            document.getElementById('companyName').textContent = data.company;
+
+            const aiCards = document.getElementById('aiCards');
+            const labels = [];
+            const buyData = [];
+            const holdData = [];
+            const sellData = [];
+
+            aiCards.innerHTML = data.aiRecommendations.map(ai => {
+                labels.push(ai.provider.toUpperCase());
+                
+                // データを振り分け
+                if (ai.action === 'BUY') {
+                    buyData.push(ai.confidence);
+                    holdData.push(0);
+                    sellData.push(0);
+                } else if (ai.action === 'HOLD') {
+                    buyData.push(0);
+                    holdData.push(ai.confidence);
+                    sellData.push(0);
+                } else {
+                    buyData.push(0);
+                    holdData.push(0);
+                    sellData.push(ai.confidence);
+                }
+
+                const actionText = {
+                    'BUY': '買い 📈',
+                    'HOLD': '保有 ➡️',
+                    'SELL': '売り 📉'
+                }[ai.action];
+
+                return `
+                    <div class="ai-card ${ai.action}">
+                        <div class="ai-name">${ai.provider.toUpperCase()}</div>
+                        <div style="font-size: 12px; color: #666;">${ai.magi_unit}</div>
+                        <div class="ai-action">${actionText}</div>
+                        <div class="ai-confidence">確信度: ${ai.confidence}%</div>
+                    </div>
+                `;
+            }).join('');
+
+            // グラフ描画
+            drawChart(labels, buyData, holdData, sellData);
+
+            document.getElementById('analysis').innerHTML = `<p>${data.analysis}</p>`;
+        }
+
+        function drawChart(labels, buyData, holdData, sellData) {
+            const ctx = document.getElementById('confidenceChart');
+            
+            if (chartInstance) {
+                chartInstance.destroy();
+            }
+
+            chartInstance = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: '買い',
+                            data: buyData,
+                            backgroundColor: '#28a745',
+                        },
+                        {
+                            label: '保有',
+                            data: holdData,
+                            backgroundColor: '#ffc107',
+                        },
+                        {
+                            label: '売り',
+                            data: sellData,
+                            backgroundColor: '#dc3545',
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: 100,
+                            title: {
+                                display: true,
+                                text: '確信度 (%)'
+                            }
+                        }
+                    },
+                    plugins: {
+                        title: {
+                            display: true,
+                            text: 'AI別の投資判断と確信度',
+                            font: { size: 16 }
+                        },
+                        legend: {
+                            display: true,
+                            position: 'top'
+                        }
+                    }
+                }
+            });
+        }
+
+        document.getElementById('symbol').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') analyze();
+        });
+    </script>
+</body>
+</html>
