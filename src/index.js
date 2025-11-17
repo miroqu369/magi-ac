@@ -1,33 +1,24 @@
 'use strict';
 const express = require('express');
 const { MAGIStorage } = require('@miroqu369/magi-stg');
-const YahooFinanceCollector = require('../collectors/yahoo-finance');
-const CompanyIntelligence = require('../collectors/company-intelligence');
+const YahooFinanceCollector = require('./collectors/yahoo-finance');
+const CompanyIntelligence = require('./collectors/company-intelligence');
 
-const app = express();
-const PORT = Number(process.env.PORT) || 8888;
+const app = global.app || express();
 
-app.use(express.json());
-
-// MAGI Storage 初期化（projectId を明示）
+// MAGI Storage 初期化（非同期・背景実行）
 const storage = new MAGIStorage({
   bucketName: 'magi-ac-data',
   datasetId: 'magi_ac',
-  projectId: 'screen-share-459802'  // ← GCP Project ID
+  projectId: 'screen-share-459802'
+});
+
+storage.initialize().catch(error => {
+  console.error('Storage init error:', error.message);
 });
 
 const collector = new YahooFinanceCollector();
 const intelligence = new CompanyIntelligence();
-
-// Health Check
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    version: '3.5.0-with-magi-stg',
-    service: 'MAGI Analytics Center (Powered by magi-stg)',
-    timestamp: new Date().toISOString()
-  });
-});
 
 // 単一分析
 app.post('/api/analyze', async (req, res) => {
@@ -83,14 +74,5 @@ app.get('/api/stats/:symbol', async (req, res) => {
   }
 });
 
-// Server 起動
-storage.initialize().then(() => {
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log('🚀 MAGI Analytics Center v3.5 (with magi-stg)');
-    console.log(`📊 Powered by @miroqu369/magi-stg`);
-    console.log(`🔌 Listening on port ${PORT}`);
-  });
-}).catch(error => {
-  console.error('❌ Initialization error:', error);
-  process.exit(1);
-});
+console.log('📊 API routes registered');
+// ← listen は削除！（bootstrap.js で実行）
