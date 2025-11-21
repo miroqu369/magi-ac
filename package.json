@@ -5,7 +5,7 @@
   "description": "MAGI Analytics Center - AI-powered investment analysis with Cohere document processing",
   "main": "src/index.js",
   "scripts": {
-    "start": "node server.js",
+    "start": "node src/index.js",
     "dev": "PORT=8888 node server.js"
   },
   "engines": {
