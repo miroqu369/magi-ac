@@ -1,135 +1,184 @@
-'use strict';
-const express = require('express');
-const { BigQuery } = require('@google-cloud/bigquery');
-const YahooFinanceCollector = require('./collectors/yahoo-finance');
-const CompanyInfoCollector = require('./collectors/company-info');
+import express from "express";
+import dotenv from "dotenv";
+import { CohereClientV2 } from "cohere-ai";
+
+dotenv.config();
 
 const app = express();
-const projectId = 'screen-share-459802';
-const bq = new BigQuery({ projectId: projectId });
-const dataset = bq.dataset('magi_ac');
+const PORT = process.env.PORT || 8888;
 
-app.use(express.json());
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ limit: "50mb" }));
 
-let tableReady = false;
+let cohereClient = null;
 
-async function initTable() {
-  try {
-    const table = dataset.table('stock_metrics_historical');
-    const [exists] = await table.exists();
-    
-    if (exists) {
-      console.log('[INIT] テーブル既存: stock_metrics_historical');
-    } else {
-      console.log('[INIT] テーブル作成中...');
-      await table.create({
-        schema: [
-          { name: 'symbol', type: 'STRING', mode: 'REQUIRED' },
-          { name: 'company_name', type: 'STRING', mode: 'NULLABLE' },
-          { name: 'industry', type: 'STRING', mode: 'NULLABLE' },
-          { name: 'sector', type: 'STRING', mode: 'NULLABLE' },
-          { name: 'country', type: 'STRING', mode: 'NULLABLE' },
-          { name: 'website', type: 'STRING', mode: 'NULLABLE' },
-          { name: 'fetch_date', type: 'DATE', mode: 'REQUIRED' },
-          { name: 'fetch_time', type: 'TIMESTAMP', mode: 'REQUIRED' },
-          { name: 'price', type: 'FLOAT64', mode: 'NULLABLE' },
-          { name: 'per', type: 'FLOAT64', mode: 'NULLABLE' },
-          { name: 'eps', type: 'FLOAT64', mode: 'NULLABLE' },
-          { name: 'dividend_yield', type: 'FLOAT64', mode: 'NULLABLE' },
-          { name: 'market_cap', type: 'FLOAT64', mode: 'NULLABLE' },
-          { name: 'high_52w', type: 'FLOAT64', mode: 'NULLABLE' },
-          { name: 'low_52w', type: 'FLOAT64', mode: 'NULLABLE' },
-          { name: 'price_change_percent', type: 'FLOAT64', mode: 'NULLABLE' },
-          { name: 'data_source', type: 'STRING', mode: 'NULLABLE' },
-          { name: 'raw_data', type: 'JSON', mode: 'NULLABLE' }
-        ]
-      });
-    }
-    tableReady = true;
-    console.log('[INIT] 完了');
-  } catch (error) {
-    console.error('[INIT] エラー:', error.message);
-    tableReady = true;
-  }
+if (process.env.COHERE_API_KEY) {
+  cohereClient = new CohereClientV2({ token: process.env.COHERE_API_KEY });
+  console.log("Cohere ready");
 }
 
-app.post('/api/fetch', async (req, res) => {
+app.get("/health", (req, res) => {
+  res.json({
+    status: "healthy",
+    service: "magi-ac",
+    version: "4.0.0",
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.get("/status", (req, res) => {
+  res.json({
+    service: "magi-ac",
+    cohere: cohereClient ? "ready" : "not available",
+    port: PORT,
+  });
+});
+
+app.post("/api/document/earnings-analysis", async (req, res) => {
+  if (!cohereClient) return res.status(503).json({ error: "Cohere not ready" });
+
   try {
-    const { symbol } = req.body;
-    if (!symbol) {
-      return res.status(400).json({ error: 'symbol required' });
-    }
+    const { document_text, symbol } = req.body;
+    if (!document_text || !symbol) return res.status(400).json({ error: "Missing fields" });
 
-    console.log('[FETCH] 開始: ' + symbol);
+    const response = await cohereClient.chat({
+      model: "command-r-plus-08-2024",
+      messages: [{ role: "user", content: `Extract financial metrics for ${symbol}. Report: ${document_text.substring(0, 2000)}` }],
+      maxTokens: 800,
+    });
 
-    const companyInfoCollector = new CompanyInfoCollector();
-    const companyInfo = await companyInfoCollector.getCompanyProfile(symbol);
-
-    const yahooCollector = new YahooFinanceCollector();
-    const financialData = await yahooCollector.getQuote(symbol);
-
-    const mergedData = { ...financialData, ...companyInfo };
-    
-    await saveToBigQuery(mergedData);
-
-    console.log('[FETCH] 完了: ' + symbol);
-
-    res.json({ status: 'success', symbol: symbol });
-
+    res.json({
+      success: true,
+      symbol,
+      analysis: response.message.content[0].text,
+      timestamp: new Date().toISOString(),
+    });
   } catch (error) {
-    console.error('[FETCH] エラー:', error.message);
     res.status(500).json({ error: error.message });
   }
 });
 
-async function saveToBigQuery(data) {
+app.post("/api/document/sentiment", async (req, res) => {
+  if (!cohereClient) return res.status(503).json({ error: "Cohere not ready" });
+
   try {
-    const table = dataset.table('stock_metrics_historical');
-    
-    const row = {
-      symbol: data.symbol,
-      company_name: data.company_name || 'Unknown',
-      industry: data.industry || 'Unknown',
-      sector: data.sector || 'Unknown',
-      country: data.country || 'Unknown',
-      website: data.website || null,
-      fetch_date: data.fetchDate,
-      fetch_time: data.timestamp,
-      price: data.financialData?.currentPrice,
-      per: data.financialData?.per,
-      eps: data.financialData?.eps,
-      dividend_yield: data.financialData?.dividendYield,
-      market_cap: data.financialData?.marketCap,
-      high_52w: data.financialData?.fiftyTwoWeekHigh,
-      low_52w: data.financialData?.fiftyTwoWeekLow,
-      price_change_percent: data.priceChange?.percent,
-      data_source: 'yahoo-finance',
-      raw_data: JSON.stringify(data.financialData)
-    };
+    const { text, symbol } = req.body;
+    if (!text || !symbol) return res.status(400).json({ error: "Missing fields" });
 
-    console.log('[SAVE] BQ 挿入開始: ' + data.symbol);
-    console.log('[SAVE] Row: ' + JSON.stringify(row).substring(0, 100));
-    
-    const result = await table.insert([row]);
-    
-    console.log('[SAVE] 成功: ' + data.symbol);
-    
-  } catch (error) {
-    console.error('[SAVE] 失敗 詳細:', {
-      message: error.message,
-      code: error.code,
-      errors: error.errors
+    const response = await cohereClient.chat({
+      model: "command-r-plus-08-2024",
+      messages: [{ role: "user", content: `Analyze sentiment for ${symbol}. News: ${text.substring(0, 1500)}` }],
+      maxTokens: 500,
     });
-  }
-}
 
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', ready: tableReady });
+    res.json({
+      success: true,
+      symbol,
+      sentiment: response.message.content[0].text,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
-const port = process.env.PORT || 8080;
-(async () => {
-  await initTable();
-  app.listen(port, () => console.log('[START] Port ' + port));
-})();
+app.post("/api/document/news-analysis", async (req, res) => {
+  if (!cohereClient) return res.status(503).json({ error: "Cohere not ready" });
 
+  try {
+    const { news_text, symbol } = req.body;
+    if (!news_text || !symbol) return res.status(400).json({ error: "Missing fields" });
+
+    const response = await cohereClient.chat({
+      model: "command-r-plus-08-2024",
+      messages: [{ role: "user", content: `Analyze company news for ${symbol}. News: ${news_text.substring(0, 1500)}` }],
+      maxTokens: 600,
+    });
+
+    res.json({
+      success: true,
+      symbol,
+      news_analysis: response.message.content[0].text,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/document/risk-analysis", async (req, res) => {
+  if (!cohereClient) return res.status(503).json({ error: "Cohere not ready" });
+
+  try {
+    const { document_text, symbol } = req.body;
+    if (!document_text || !symbol) return res.status(400).json({ error: "Missing fields" });
+
+    const response = await cohereClient.chat({
+      model: "command-r-plus-08-2024",
+      messages: [{ role: "user", content: `Identify risks for ${symbol}. Report: ${document_text.substring(0, 2000)}` }],
+      maxTokens: 800,
+    });
+
+    res.json({
+      success: true,
+      symbol,
+      risk_analysis: response.message.content[0].text,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/document/comprehensive-analysis", async (req, res) => {
+  if (!cohereClient) return res.status(503).json({ error: "Cohere not ready" });
+
+  try {
+    const { document_text, symbol } = req.body;
+    if (!document_text || !symbol) return res.status(400).json({ error: "Missing fields" });
+
+    const startTime = Date.now();
+
+    const [earnings, risks, summary] = await Promise.all([
+      cohereClient.chat({
+        model: "command-r-plus-08-2024",
+        messages: [{ role: "user", content: `Extract metrics for ${symbol}. Report: ${document_text.substring(0, 1500)}` }],
+        maxTokens: 400,
+      }),
+      cohereClient.chat({
+        model: "command-r-plus-08-2024",
+        messages: [{ role: "user", content: `List top risks for ${symbol}. Report: ${document_text.substring(0, 1500)}` }],
+        maxTokens: 400,
+      }),
+      cohereClient.chat({
+        model: "command-r-plus-08-2024",
+        messages: [{ role: "user", content: `Summarize ${symbol} in 3 points. Report: ${document_text.substring(0, 1500)}` }],
+        maxTokens: 300,
+      }),
+    ]);
+
+    const duration = Date.now() - startTime;
+
+    res.json({
+      success: true,
+      symbol,
+      comprehensive: {
+        earnings: earnings.message.content[0].text,
+        risks: risks.message.content[0].text,
+        summary: summary.message.content[0].text,
+      },
+      processing_time_ms: duration,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.listen(PORT, () => {
+  console.log(`MAGI Analytics Center v4.0 - Cohere Integration`);
+  console.log(`Server: http://localhost:${PORT}`);
+  console.log(`Status: ${cohereClient ? "Ready" : "Limited"}`);
+});
+
+export default app;

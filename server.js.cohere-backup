@@ -1,0 +1,135 @@
+'use strict';
+const express = require('express');
+const { BigQuery } = require('@google-cloud/bigquery');
+const YahooFinanceCollector = require('./collectors/yahoo-finance');
+const CompanyInfoCollector = require('./collectors/company-info');
+
+const app = express();
+const projectId = 'screen-share-459802';
+const bq = new BigQuery({ projectId: projectId });
+const dataset = bq.dataset('magi_ac');
+
+app.use(express.json());
+
+let tableReady = false;
+
+async function initTable() {
+  try {
+    const table = dataset.table('stock_metrics_historical');
+    const [exists] = await table.exists();
+    
+    if (exists) {
+      console.log('[INIT] テーブル既存: stock_metrics_historical');
+    } else {
+      console.log('[INIT] テーブル作成中...');
+      await table.create({
+        schema: [
+          { name: 'symbol', type: 'STRING', mode: 'REQUIRED' },
+          { name: 'company_name', type: 'STRING', mode: 'NULLABLE' },
+          { name: 'industry', type: 'STRING', mode: 'NULLABLE' },
+          { name: 'sector', type: 'STRING', mode: 'NULLABLE' },
+          { name: 'country', type: 'STRING', mode: 'NULLABLE' },
+          { name: 'website', type: 'STRING', mode: 'NULLABLE' },
+          { name: 'fetch_date', type: 'DATE', mode: 'REQUIRED' },
+          { name: 'fetch_time', type: 'TIMESTAMP', mode: 'REQUIRED' },
+          { name: 'price', type: 'FLOAT64', mode: 'NULLABLE' },
+          { name: 'per', type: 'FLOAT64', mode: 'NULLABLE' },
+          { name: 'eps', type: 'FLOAT64', mode: 'NULLABLE' },
+          { name: 'dividend_yield', type: 'FLOAT64', mode: 'NULLABLE' },
+          { name: 'market_cap', type: 'FLOAT64', mode: 'NULLABLE' },
+          { name: 'high_52w', type: 'FLOAT64', mode: 'NULLABLE' },
+          { name: 'low_52w', type: 'FLOAT64', mode: 'NULLABLE' },
+          { name: 'price_change_percent', type: 'FLOAT64', mode: 'NULLABLE' },
+          { name: 'data_source', type: 'STRING', mode: 'NULLABLE' },
+          { name: 'raw_data', type: 'JSON', mode: 'NULLABLE' }
+        ]
+      });
+    }
+    tableReady = true;
+    console.log('[INIT] 完了');
+  } catch (error) {
+    console.error('[INIT] エラー:', error.message);
+    tableReady = true;
+  }
+}
+
+app.post('/api/fetch', async (req, res) => {
+  try {
+    const { symbol } = req.body;
+    if (!symbol) {
+      return res.status(400).json({ error: 'symbol required' });
+    }
+
+    console.log('[FETCH] 開始: ' + symbol);
+
+    const companyInfoCollector = new CompanyInfoCollector();
+    const companyInfo = await companyInfoCollector.getCompanyProfile(symbol);
+
+    const yahooCollector = new YahooFinanceCollector();
+    const financialData = await yahooCollector.getQuote(symbol);
+
+    const mergedData = { ...financialData, ...companyInfo };
+    
+    await saveToBigQuery(mergedData);
+
+    console.log('[FETCH] 完了: ' + symbol);
+
+    res.json({ status: 'success', symbol: symbol });
+
+  } catch (error) {
+    console.error('[FETCH] エラー:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+async function saveToBigQuery(data) {
+  try {
+    const table = dataset.table('stock_metrics_historical');
+    
+    const row = {
+      symbol: data.symbol,
+      company_name: data.company_name || 'Unknown',
+      industry: data.industry || 'Unknown',
+      sector: data.sector || 'Unknown',
+      country: data.country || 'Unknown',
+      website: data.website || null,
+      fetch_date: data.fetchDate,
+      fetch_time: data.timestamp,
+      price: data.financialData?.currentPrice,
+      per: data.financialData?.per,
+      eps: data.financialData?.eps,
+      dividend_yield: data.financialData?.dividendYield,
+      market_cap: data.financialData?.marketCap,
+      high_52w: data.financialData?.fiftyTwoWeekHigh,
+      low_52w: data.financialData?.fiftyTwoWeekLow,
+      price_change_percent: data.priceChange?.percent,
+      data_source: 'yahoo-finance',
+      raw_data: JSON.stringify(data.financialData)
+    };
+
+    console.log('[SAVE] BQ 挿入開始: ' + data.symbol);
+    console.log('[SAVE] Row: ' + JSON.stringify(row).substring(0, 100));
+    
+    const result = await table.insert([row]);
+    
+    console.log('[SAVE] 成功: ' + data.symbol);
+    
+  } catch (error) {
+    console.error('[SAVE] 失敗 詳細:', {
+      message: error.message,
+      code: error.code,
+      errors: error.errors
+    });
+  }
+}
+
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', ready: tableReady });
+});
+
+const port = process.env.PORT || 8080;
+(async () => {
+  await initTable();
+  app.listen(port, () => console.log('[START] Port ' + port));
+})();
+

@@ -1,78 +1,255 @@
-'use strict';
-const express = require('express');
-const { MAGIStorage } = require('@miroqu369/magi-stg');
-const YahooFinanceCollector = require('./collectors/yahoo-finance');
-const CompanyIntelligence = require('./collectors/company-intelligence');
+import express from "express";
+import dotenv from "dotenv";
+import { CohereClientV2 } from "cohere-ai";
 
-const app = global.app || express();
+dotenv.config();
 
-// MAGI Storage 初期化（非同期・背景実行）
-const storage = new MAGIStorage({
-  bucketName: 'magi-ac-data',
-  datasetId: 'magi_ac',
-  projectId: 'screen-share-459802'
+const app = express();
+const PORT = process.env.PORT || 8888;
+
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ limit: "50mb" }));
+
+let cohereClient = null;
+
+if (process.env.COHERE_API_KEY) {
+  cohereClient = new CohereClientV2({ token: process.env.COHERE_API_KEY });
+  console.log("✓ Cohere initialized");
+}
+
+app.get("/health", (req, res) => {
+  res.json({
+    status: "healthy",
+    service: "magi-ac (Analytics Center with Cohere)",
+    version: "4.0.0",
+    timestamp: new Date().toISOString(),
+  });
 });
 
-storage.initialize().catch(error => {
-  console.error('Storage init error:', error.message);
+app.get("/status", (req, res) => {
+  res.json({
+    service: "magi-ac",
+    cohere: cohereClient ? "ready" : "not available",
+    port: PORT,
+  });
 });
 
-const collector = new YahooFinanceCollector();
-const intelligence = new CompanyIntelligence();
+app.post("/api/document/earnings-analysis", async (req, res) => {
+  if (!cohereClient) {
+    return res.status(503).json({ error: "Cohere not initialized" });
+  }
 
-// 単一分析
-app.post('/api/analyze', async (req, res) => {
   try {
-    const { symbol } = req.body;
-    if (!symbol) return res.status(400).json({ error: 'symbol required' });
+    const { document_text, symbol } = req.body;
+    if (!document_text || !symbol) {
+      return res.status(400).json({ error: "Missing fields" });
+    }
 
-    const quote = await collector.getQuote(symbol.toUpperCase());
-    if (!quote) return res.status(404).json({ error: 'Quote not found' });
+    console.log(`[EARNINGS] ${symbol}`);
 
-    await storage.save(quote, {
-      type: 'json',
-      path: `analyses/${symbol}/${new Date().toISOString()}.json`
+    const response = await cohereClient.chat({
+      model: "command-r-plus",
+      messages: [
+        {
+          role: "user",
+          content: `Extract financial metrics for ${symbol}. Report: ${document_text.substring(0, 2000)}`,
+        },
+      ],
+      maxTokens: 800,
     });
 
-    res.json(quote);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// 最新データ
-app.get('/api/latest/:symbol', async (req, res) => {
-  try {
-    const data = await storage.fetch({
-      source: 'bigquery',
-      symbol: req.params.symbol.toUpperCase()
+    res.json({
+      success: true,
+      symbol,
+      analysis: response.message.content[0].text,
+      timestamp: new Date().toISOString(),
     });
-    res.json(data || { error: 'No data' });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// 履歴
-app.get('/api/history/:symbol', async (req, res) => {
+app.post("/api/document/sentiment", async (req, res) => {
+  if (!cohereClient) {
+    return res.status(503).json({ error: "Cohere not initialized" });
+  }
+
   try {
-    const days = parseInt(req.query.days) || 30;
-    const data = await storage.history(req.params.symbol.toUpperCase(), days);
-    res.json({ symbol: req.params.symbol.toUpperCase(), days, data });
+    const { text, symbol } = req.body;
+    if (!text || !symbol) {
+      return res.status(400).json({ error: "Missing fields" });
+    }
+
+    console.log(`[SENTIMENT] ${symbol}`);
+
+    const response = await cohereClient.chat({
+      model: "command-r-plus",
+      messages: [
+        {
+          role: "user",
+          content: `Analyze sentiment for ${symbol}. News: ${text.substring(0, 1500)}`,
+        },
+      ],
+      maxTokens: 500,
+    });
+
+    res.json({
+      success: true,
+      symbol,
+      sentiment: response.message.content[0].text,
+      timestamp: new Date().toISOString(),
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// 統計
-app.get('/api/stats/:symbol', async (req, res) => {
+app.post("/api/document/news-analysis", async (req, res) => {
+  if (!cohereClient) {
+    return res.status(503).json({ error: "Cohere not initialized" });
+  }
+
   try {
-    const stats = await storage.stats(req.params.symbol.toUpperCase());
-    res.json(stats || { error: 'No stats' });
+    const { news_text, symbol } = req.body;
+    if (!news_text || !symbol) {
+      return res.status(400).json({ error: "Missing fields" });
+    }
+
+    console.log(`[NEWS] ${symbol}`);
+
+    const response = await cohereClient.chat({
+      model: "command-r-plus",
+      messages: [
+        {
+          role: "user",
+          content: `Analyze company news for ${symbol}. News: ${news_text.substring(0, 1500)}`,
+        },
+      ],
+      maxTokens: 600,
+    });
+
+    res.json({
+      success: true,
+      symbol,
+      news_analysis: response.message.content[0].text,
+      timestamp: new Date().toISOString(),
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-console.log('📊 API routes registered');
-// ← listen は削除！（bootstrap.js で実行）
+app.post("/api/document/risk-analysis", async (req, res) => {
+  if (!cohereClient) {
+    return res.status(503).json({ error: "Cohere not initialized" });
+  }
+
+  try {
+    const { document_text, symbol } = req.body;
+    if (!document_text || !symbol) {
+      return res.status(400).json({ error: "Missing fields" });
+    }
+
+    console.log(`[RISK] ${symbol}`);
+
+    const response = await cohereClient.chat({
+      model: "command-r-plus",
+      messages: [
+        {
+          role: "user",
+          content: `Identify risks for ${symbol}. Report: ${document_text.substring(0, 2000)}`,
+        },
+      ],
+      maxTokens: 800,
+    });
+
+    res.json({
+      success: true,
+      symbol,
+      risk_analysis: response.message.content[0].text,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/document/comprehensive-analysis", async (req, res) => {
+  if (!cohereClient) {
+    return res.status(503).json({ error: "Cohere not initialized" });
+  }
+
+  try {
+    const { document_text, symbol } = req.body;
+    if (!document_text || !symbol) {
+      return res.status(400).json({ error: "Missing fields" });
+    }
+
+    console.log(`[COMPREHENSIVE] ${symbol}`);
+    const startTime = Date.now();
+
+    const [earnings, risks, summary] = await Promise.all([
+      cohereClient.chat({
+        model: "command-r-plus",
+        messages: [
+          {
+            role: "user",
+            content: `Extract metrics for ${symbol}. Report: ${document_text.substring(0, 1500)}`,
+          },
+        ],
+        maxTokens: 400,
+      }),
+      cohereClient.chat({
+        model: "command-r-plus",
+        messages: [
+          {
+            role: "user",
+            content: `List top risks for ${symbol}. Report: ${document_text.substring(0, 1500)}`,
+          },
+        ],
+        maxTokens: 400,
+      }),
+      cohereClient.chat({
+        model: "command-r-plus",
+        messages: [
+          {
+            role: "user",
+            content: `Summarize ${symbol} in 3 points. Report: ${document_text.substring(0, 1500)}`,
+          },
+        ],
+        maxTokens: 300,
+      }),
+    ]);
+
+    const duration = Date.now() - startTime;
+
+    res.json({
+      success: true,
+      symbol,
+      comprehensive: {
+        earnings: earnings.message.content[0].text,
+        risks: risks.message.content[0].text,
+        summary: summary.message.content[0].text,
+      },
+      processing_time_ms: duration,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.listen(PORT, () => {
+  console.log(`
+╔════════════════════════════════════════╗
+║  MAGI Analytics Center v4.0            ║
+║  Cohere Integration Ready              ║
+╚════════════════════════════════════════╝
+
+Server: http://localhost:${PORT}
+Status: ${cohereClient ? "✓ Ready" : "⚠ Limited"}
+Time: ${new Date().toISOString()}
+  `);
+});
+
+export default app;
