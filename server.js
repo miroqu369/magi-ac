@@ -182,3 +182,84 @@ app.listen(PORT, () => {
 });
 
 export default app;
+
+// ====== PDF ANALYSIS ======
+import multer from "multer";
+import pdfParse from "pdf-parse";
+import fs from "fs";
+
+const upload = multer({ storage: multer.memoryStorage() });
+
+app.post("/api/document/upload-earnings-pdf", upload.single("file"), async (req, res) => {
+  if (!cohereClient) return res.status(503).json({ error: "Cohere not ready" });
+  if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
+  try {
+    const { symbol } = req.body;
+    if (!symbol) return res.status(400).json({ error: "Missing symbol" });
+
+    console.log(`[PDF] Processing earnings report for ${symbol}`);
+
+    let documentText = "";
+
+    // PDF解析
+    if (req.file.mimetype === "application/pdf") {
+      const pdfData = await pdfParse(req.file.buffer);
+      documentText = pdfData.text;
+    } else if (req.file.mimetype === "text/plain") {
+      documentText = req.file.buffer.toString("utf-8");
+    } else {
+      return res.status(400).json({ error: "Unsupported file type. Use PDF or TXT." });
+    }
+
+    console.log(`[PDF] Extracted ${documentText.length} characters from ${req.file.originalname}`);
+
+    const startTime = Date.now();
+
+    // 3つのAIで並列分析
+    const [earnings, risks, summary] = await Promise.all([
+      cohereClient.chat({
+        model: "command-r-plus-08-2024",
+        messages: [{ role: "user", content: `Extract financial metrics from earnings report for ${symbol}. Revenue, net income, EPS, margins. Report: ${documentText.substring(0, 2000)}` }],
+        maxTokens: 500,
+      }),
+      cohereClient.chat({
+        model: "command-r-plus-08-2024",
+        messages: [{ role: "user", content: `List top 5 risks for ${symbol}. Report: ${documentText.substring(0, 2000)}` }],
+        maxTokens: 500,
+      }),
+      cohereClient.chat({
+        model: "command-r-plus-08-2024",
+        messages: [{ role: "user", content: `Summarize ${symbol} earnings in 3 key points. Report: ${documentText.substring(0, 2000)}` }],
+        maxTokens: 400,
+      }),
+    ]);
+
+    const duration = Date.now() - startTime;
+
+    // レスポンス生成
+    const analysisResult = {
+      success: true,
+      symbol,
+      filename: req.file.originalname,
+      filesize: req.file.size,
+      analysis: {
+        financial_metrics: earnings.message.content[0].text,
+        risk_assessment: risks.message.content[0].text,
+        executive_summary: summary.message.content[0].text,
+      },
+      processing: {
+        duration_ms: duration,
+        extracted_chars: documentText.length,
+        ai_model: "command-r-plus-08-2024",
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    res.json(analysisResult);
+  } catch (error) {
+    console.error("PDF analysis error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+

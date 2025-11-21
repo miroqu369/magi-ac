@@ -1,4 +1,48 @@
+# Dependencies
 node_modules/
+package-lock.json
+npm-debug.log
+yarn-error.log
+
+# Test files
+test-*.js
+*.test.js
+
+# Backup files
+*.backup
+*.backup.*
+*.bak
+
+# Temporary files
+/tmp/
+*.tmp
+*.temp
+
+# Environment files
 .env
-*.log
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
 .DS_Store
+Thumbs.db
+
+# Build
+/dist/
+/build/
+.next/
+
+# Logs
+logs/
+*.log
+
+# Keys (never commit)
+*-key.json
+secrets.json
+credentials.json
