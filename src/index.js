@@ -244,6 +244,203 @@ app.post('/api/document/summarize', async (req, res) => {
   }
 });
 
+// Swing Trading Analysis Endpoint
+app.post('/api/swing/analyze', async (req, res) => {
+  try {
+    const { symbol } = req.body;
+    
+    if (!symbol) {
+      return res.status(400).json({ error: 'Symbol is required' });
+    }
+
+    console.log(`[SWING] Starting swing analysis for ${symbol}`);
+
+    // Get stock data from Yahoo Finance
+    const stockData = await getStockQuote(symbol);
+    
+    // Calculate technical indicators
+    const currentPrice = stockData.regularMarketPrice || 0;
+    const previousClose = stockData.regularMarketPreviousClose || currentPrice;
+    const change = currentPrice - previousClose;
+    const changePercent = (change / previousClose) * 100;
+    
+    // Get price history for RSI calculation (simulate with available data)
+    const fiftyDayAvg = stockData.fiftyDayAverage || currentPrice;
+    const twoHundredDayAvg = stockData.twoHundredDayAverage || currentPrice;
+    
+    // Calculate RSI (simplified using available data)
+    const rsi = calculateSimpleRSI(currentPrice, previousClose, stockData);
+    
+    // Determine trend
+    const trend = determineTrend(currentPrice, fiftyDayAvg, twoHundredDayAvg);
+    
+    // Calculate support and resistance levels
+    const fiftyTwoWeekHigh = stockData.fiftyTwoWeekHigh || currentPrice * 1.2;
+    const fiftyTwoWeekLow = stockData.fiftyTwoWeekLow || currentPrice * 0.8;
+    
+    // Swing trading decision logic
+    const swingDecision = makeSwingDecision(
+      rsi, 
+      trend, 
+      currentPrice, 
+      fiftyDayAvg, 
+      twoHundredDayAvg,
+      fiftyTwoWeekHigh,
+      fiftyTwoWeekLow
+    );
+    
+    // Prepare response
+    const analysis = {
+      symbol: symbol.toUpperCase(),
+      company: stockData.shortName || stockData.longName || 'Unknown',
+      timestamp: new Date().toISOString(),
+      
+      // Price data
+      priceData: {
+        current: currentPrice,
+        previousClose: previousClose,
+        change: change,
+        changePercent: changePercent.toFixed(2),
+        fiftyDayAvg: fiftyDayAvg,
+        twoHundredDayAvg: twoHundredDayAvg,
+        fiftyTwoWeekHigh: fiftyTwoWeekHigh,
+        fiftyTwoWeekLow: fiftyTwoWeekLow
+      },
+      
+      // Technical indicators
+      technicalIndicators: {
+        rsi: rsi.toFixed(2),
+        trend: trend,
+        support: swingDecision.support,
+        resistance: swingDecision.resistance
+      },
+      
+      // Swing trading recommendation
+      recommendation: {
+        action: swingDecision.action,
+        confidence: swingDecision.confidence,
+        entryPrice: swingDecision.entryPrice,
+        stopLoss: swingDecision.stopLoss,
+        takeProfit: swingDecision.takeProfit,
+        reasoning: swingDecision.reasoning
+      }
+    };
+
+    console.log(`[SWING] Analysis complete: ${swingDecision.action} (${swingDecision.confidence}% confidence)`);
+
+    res.json(analysis);
+
+  } catch (error) {
+    console.error('[ERROR] Swing analysis failed:', error.message);
+    res.status(500).json({ 
+      error: 'Swing analysis failed', 
+      details: error.message 
+    });
+  }
+});
+
+// Helper function: Calculate simplified RSI
+function calculateSimpleRSI(currentPrice, previousClose, stockData) {
+  const change = currentPrice - previousClose;
+  const avgGain = Math.abs(change) > 0 && change > 0 ? Math.abs(change) : 0.5;
+  const avgLoss = Math.abs(change) > 0 && change < 0 ? Math.abs(change) : 0.5;
+  
+  const rs = avgGain / avgLoss;
+  const rsi = 100 - (100 / (1 + rs));
+  
+  const fiftyDayAvg = stockData.fiftyDayAverage || currentPrice;
+  if (currentPrice > fiftyDayAvg * 1.1) return Math.min(rsi + 15, 85);
+  if (currentPrice < fiftyDayAvg * 0.9) return Math.max(rsi - 15, 15);
+  
+  return rsi;
+}
+
+// Helper function: Determine trend
+function determineTrend(currentPrice, fiftyDayAvg, twoHundredDayAvg) {
+  if (currentPrice > fiftyDayAvg && fiftyDayAvg > twoHundredDayAvg) {
+    return 'STRONG_UPTREND';
+  } else if (currentPrice > fiftyDayAvg) {
+    return 'UPTREND';
+  } else if (currentPrice < fiftyDayAvg && fiftyDayAvg < twoHundredDayAvg) {
+    return 'STRONG_DOWNTREND';
+  } else if (currentPrice < fiftyDayAvg) {
+    return 'DOWNTREND';
+  } else {
+    return 'SIDEWAYS';
+  }
+}
+
+// Helper function: Make swing trading decision
+function makeSwingDecision(rsi, trend, currentPrice, fiftyDayAvg, twoHundredDayAvg, high52w, low52w) {
+  let action = 'WAIT';
+  let confidence = 0;
+  let reasoning = '';
+  
+  const support = Math.max(fiftyDayAvg * 0.95, low52w);
+  const resistance = Math.min(fiftyDayAvg * 1.05, high52w);
+  
+  if (rsi < 35 && (trend === 'UPTREND' || trend === 'STRONG_UPTREND')) {
+    action = 'BUY';
+    confidence = 85;
+    reasoning = 'Oversold in uptrend - good entry point';
+  } else if (rsi < 30) {
+    action = 'BUY';
+    confidence = 75;
+    reasoning = 'Oversold condition - potential reversal';
+  } else if (rsi >= 35 && rsi <= 45 && trend === 'STRONG_UPTREND') {
+    action = 'BUY';
+    confidence = 70;
+    reasoning = 'Pullback in strong uptrend';
+  } else if (rsi > 70 && (trend === 'DOWNTREND' || trend === 'STRONG_DOWNTREND')) {
+    action = 'SELL';
+    confidence = 85;
+    reasoning = 'Overbought in downtrend - exit position';
+  } else if (rsi > 75) {
+    action = 'SELL';
+    confidence = 80;
+    reasoning = 'Extremely overbought - take profits';
+  } else if (rsi >= 45 && rsi <= 55) {
+    action = 'WAIT';
+    confidence = 60;
+    reasoning = 'Neutral zone - wait for better setup';
+  } else if (trend === 'SIDEWAYS') {
+    action = 'WAIT';
+    confidence = 50;
+    reasoning = 'Sideways market - no clear trend';
+  } else {
+    action = 'WAIT';
+    confidence = 55;
+    reasoning = 'No clear swing setup';
+  }
+  
+  let entryPrice, stopLoss, takeProfit;
+  
+  if (action === 'BUY') {
+    entryPrice = currentPrice * 0.995;
+    stopLoss = currentPrice * 0.95;
+    takeProfit = currentPrice * 1.10;
+  } else if (action === 'SELL') {
+    entryPrice = currentPrice * 1.005;
+    stopLoss = currentPrice * 1.05;
+    takeProfit = currentPrice * 0.90;
+  } else {
+    entryPrice = currentPrice;
+    stopLoss = currentPrice * 0.95;
+    takeProfit = currentPrice * 1.08;
+  }
+  
+  return {
+    action,
+    confidence,
+    reasoning,
+    support: support.toFixed(2),
+    resistance: resistance.toFixed(2),
+    entryPrice: entryPrice.toFixed(2),
+    stopLoss: stopLoss.toFixed(2),
+    takeProfit: takeProfit.toFixed(2)
+  };
+}
+
 app.listen(PORT, () => {
   console.log(`
 ╔═══════════════════════════════════════╗
