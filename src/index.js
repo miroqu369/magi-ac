@@ -1,6 +1,6 @@
 import express from 'express';
 import dotenv from 'dotenv';
-import { getStockQuote } from '../collectors/yahoo-finance.js';
+import { getStockQuote, getComprehensiveData } from '../collectors/yahoo-finance.js';
 import { saveToStorage } from '../utils/storage.js';
 import { 
   queryLatestPrice, 
@@ -244,7 +244,7 @@ app.post('/api/document/summarize', async (req, res) => {
   }
 });
 
-// Swing Trading Analysis Endpoint
+// Swing Trading Analysis Endpoint (Enhanced with Alpha Vantage)
 app.post('/api/swing/analyze', async (req, res) => {
   try {
     const { symbol } = req.body;
@@ -255,36 +255,34 @@ app.post('/api/swing/analyze', async (req, res) => {
 
     console.log(`[SWING] Starting swing analysis for ${symbol}`);
 
-    // Get stock data from Yahoo Finance
-    const stockData = await getStockQuote(symbol);
+    // Get comprehensive data from Alpha Vantage (quote + historical + indicators)
+    const alphaData = await getComprehensiveData(symbol);
     
-    // Calculate technical indicators
-    const currentPrice = stockData.regularMarketPrice || 0;
-    const previousClose = stockData.regularMarketPreviousClose || currentPrice;
-    const change = currentPrice - previousClose;
-    const changePercent = (change / previousClose) * 100;
+    const currentPrice = alphaData.quote.price;
+    const previousClose = alphaData.quote.previousClose;
+    const change = alphaData.quote.change;
+    const changePercent = alphaData.quote.changePercent;
     
-    // Get price history for RSI calculation (simulate with available data)
-    const fiftyDayAvg = stockData.fiftyDayAverage || currentPrice;
-    const twoHundredDayAvg = stockData.twoHundredDayAverage || currentPrice;
+    // Use calculated RSI from Alpha Vantage
+    const rsi = alphaData.indicators.rsi;
+    const sma50 = alphaData.indicators.sma50;
+    const sma200 = alphaData.indicators.sma200;
     
-    // Calculate RSI (simplified using available data)
-    const rsi = calculateSimpleRSI(currentPrice, previousClose, stockData);
+    // Determine trend using accurate moving averages
+    const trend = determineTrend(currentPrice, sma50, sma200);
     
-    // Determine trend
-    const trend = determineTrend(currentPrice, fiftyDayAvg, twoHundredDayAvg);
-    
-    // Calculate support and resistance levels
-    const fiftyTwoWeekHigh = stockData.fiftyTwoWeekHigh || currentPrice * 1.2;
-    const fiftyTwoWeekLow = stockData.fiftyTwoWeekLow || currentPrice * 0.8;
+    // Calculate 52-week high/low from historical data
+    const historicalPrices = alphaData.timeSeries.map(d => d.close);
+    const fiftyTwoWeekHigh = Math.max(...historicalPrices);
+    const fiftyTwoWeekLow = Math.min(...historicalPrices);
     
     // Swing trading decision logic
     const swingDecision = makeSwingDecision(
       rsi, 
       trend, 
       currentPrice, 
-      fiftyDayAvg, 
-      twoHundredDayAvg,
+      sma50, 
+      sma200,
       fiftyTwoWeekHigh,
       fiftyTwoWeekLow
     );
@@ -292,7 +290,7 @@ app.post('/api/swing/analyze', async (req, res) => {
     // Prepare response
     const analysis = {
       symbol: symbol.toUpperCase(),
-      company: stockData.shortName || stockData.longName || 'Unknown',
+      company: `${symbol} Inc.`,
       timestamp: new Date().toISOString(),
       
       // Price data
@@ -300,9 +298,9 @@ app.post('/api/swing/analyze', async (req, res) => {
         current: currentPrice,
         previousClose: previousClose,
         change: change,
-        changePercent: changePercent.toFixed(2),
-        fiftyDayAvg: fiftyDayAvg,
-        twoHundredDayAvg: twoHundredDayAvg,
+        changePercent: changePercent,
+        fiftyDayAvg: sma50,
+        twoHundredDayAvg: sma200,
         fiftyTwoWeekHigh: fiftyTwoWeekHigh,
         fiftyTwoWeekLow: fiftyTwoWeekLow
       },
@@ -323,7 +321,11 @@ app.post('/api/swing/analyze', async (req, res) => {
         stopLoss: swingDecision.stopLoss,
         takeProfit: swingDecision.takeProfit,
         reasoning: swingDecision.reasoning
-      }
+      },
+      
+      // Data source
+      dataSource: 'Alpha Vantage',
+      historicalDataPoints: alphaData.timeSeries.length
     };
 
     console.log(`[SWING] Analysis complete: ${swingDecision.action} (${swingDecision.confidence}% confidence)`);
