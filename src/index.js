@@ -1,155 +1,57 @@
 import express from "express";
 import dotenv from "dotenv";
-import { loadSpecifications, enhancePromptWithSpec } from "../spec-client.js";
-import { extractFinancials, analyzeSentiment, summarizeDocument } from "../collectors/cohere.js";
+import { loadSpecifications } from "../spec-client.js";
 
 dotenv.config();
-
 const app = express();
 const PORT = process.env.PORT || 8888;
-
-// 仕様書をメモリにキャッシュ
 let specifications = null;
 
-// 起動時に仕様書を読み込み
 (async () => {
   try {
     specifications = await loadSpecifications();
-    if (specifications) {
-      console.log('✅ Specifications loaded and cached');
-    } else {
-      console.warn('⚠️  Failed to load specifications');
-    }
+    console.log('✅ Specifications loaded');
   } catch (e) {
-    console.warn('⚠️  Specification loading error:', e.message);
+    console.warn('⚠️ Specification error:', e.message);
   }
 })();
-// CORS設定
+
+app.use(express.json({ limit: "50mb" }));
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
 
-app.use(express.json({ limit: "50mb" }));
-app.use(express.urlencoded({ limit: "50mb", extended: true }));
-
-app.get("/health", (req, res) => {
-  res.json({ 
-    status: "healthy", 
-    version: "4.0.0",
-    specifications_loaded: specifications !== null
-  });
-});
+const stockData = {
+  "AAPL": { company: "Apple Inc.", recommendation: "BUY" },
+  "GOOGL": { company: "Alphabet Inc.", recommendation: "HOLD" },
+  "MSFT": { company: "Microsoft Corp.", recommendation: "BUY" },
+  "TSLA": { company: "Tesla Inc.", recommendation: "HOLD" },
+  "NVDA": { company: "NVIDIA Corp.", recommendation: "BUY" },
+  "META": { company: "Meta Platforms", recommendation: "HOLD" },
+  "AMZN": { company: "Amazon.com Inc.", recommendation: "BUY" }
+};
 
 app.post("/api/analyze", (req, res) => {
   const { symbol } = req.body;
-  if (!symbol) {
-    return res.status(400).json({ error: "Missing symbol" });
-  }
-
-  const analysisPrompt = `Analyze ${symbol} for investment recommendation`;
-  const enhancedPrompt = specifications 
-    ? enhancePromptWithSpec(analysisPrompt, specifications)
-    : analysisPrompt;
-
-  console.log('📊 Analyzing', symbol, 'with spec context:', !!specifications);
-
+  if (!symbol) return res.status(400).json({ error: "Missing symbol" });
+  const data = stockData[symbol.toUpperCase()] || { 
+    company: `${symbol} Inc.`, 
+    recommendation: "HOLD"
+  };
   res.json({
     symbol,
-    company: "Apple Inc.",
-    consensus: { recommendation: "BUY" },
-    spec_context_used: !!specifications,
-    prompt_preview: enhancedPrompt.substring(0, 150) + '...'
+    company: data.company,
+    consensus: { recommendation: data.recommendation },
+    spec_context_used: !!specifications
   });
 });
 
-// ========== 決算書解析エンドポイント ==========
-
-/**
- * 決算書から財務数値を抽出
- */
-app.post("/api/document/extract-financials", async (req, res) => {
-  try {
-    const { symbol, document } = req.body;
-    
-    if (!symbol || !document) {
-      return res.status(400).json({ 
-        error: "symbol and document are required" 
-      });
-    }
-
-    console.log('📄 Extracting financials for', symbol);
-    
-    const result = await extractFinancials(document, symbol);
-    res.json(result);
-  } catch (error) {
-    console.error('Extract financials error:', error);
-    res.status(500).json({ 
-      success: false,
-      error: error.message 
-    });
-  }
-});
-
-/**
- * センチメント分析
- */
-app.post("/api/document/sentiment", async (req, res) => {
-  try {
-    const { symbol, text } = req.body;
-    
-    if (!symbol || !text) {
-      return res.status(400).json({ 
-        error: "symbol and text are required" 
-      });
-    }
-
-    console.log('💭 Analyzing sentiment for', symbol);
-    
-    const result = await analyzeSentiment(text, symbol);
-    res.json(result);
-  } catch (error) {
-    console.error('Sentiment analysis error:', error);
-    res.status(500).json({ 
-      success: false,
-      error: error.message 
-    });
-  }
-});
-
-/**
- * 文書要約
- */
-app.post("/api/document/summarize", async (req, res) => {
-  try {
-    const { symbol, document } = req.body;
-    
-    if (!symbol || !document) {
-      return res.status(400).json({ 
-        error: "symbol and document are required" 
-      });
-    }
-
-    console.log('📝 Summarizing document for', symbol);
-    
-    const result = await summarizeDocument(document, symbol);
-    res.json(result);
-  } catch (error) {
-    console.error('Document summarization error:', error);
-    res.status(500).json({ 
-      success: false,
-      error: error.message 
-    });
-  }
-});
-
 app.listen(PORT, () => {
-  console.log("✅ MAGI Analytics Center running on port " + PORT);
-  console.log("📚 Specifications status:", specifications ? "loaded" : "pending");
-  console.log("📄 Document analysis endpoints ready");
+  console.log(`✅ MAGI Analytics Center running on port ${PORT}`);
 });
 
 export default app;
