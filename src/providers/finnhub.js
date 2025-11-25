@@ -25,3 +25,38 @@ async function getStockData(symbol) {
 }
 
 module.exports = { getStockData };
+
+// OHLC データ取得（テクニカル分析用）
+async function getOHLCData(symbol, days = 30) {
+  try {
+    const from = Math.floor(Date.now() / 1000) - (days * 24 * 60 * 60);
+    const to = Math.floor(Date.now() / 1000);
+    
+    const res = await axios.get(`${BASE_URL}/candle`, {
+      params: { 
+        symbol, 
+        resolution: 'D',  // 日足
+        from, 
+        to, 
+        token: API_KEY 
+      }
+    });
+
+    console.log(`[Finnhub] ${symbol} OHLC データ取得 - ${res.data.c.length}日分`);
+
+    return {
+      symbol: symbol.toUpperCase(),
+      closes: res.data.c || [],      // Close prices
+      opens: res.data.o || [],       // Open prices
+      highs: res.data.h || [],       // High prices
+      lows: res.data.l || [],        // Low prices
+      volumes: res.data.v || [],     // Volumes
+      timestamps: res.data.t || []   // Timestamps
+    };
+  } catch (error) {
+    console.error(`[Finnhub] OHLC エラー for ${symbol}:`, error.message);
+    return null;
+  }
+}
+
+module.exports.getOHLCData = getOHLCData;

@@ -1,170 +1,92 @@
-import express from "express";
-import dotenv from "dotenv";
-import { loadSpecifications } from "../spec-client.js";
+import express from 'express';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+import fetch from 'node-fetch';
+import fs from 'fs';
 
-dotenv.config();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
 const app = express();
-const PORT = process.env.PORT || 8888;
+app.use(express.json());
 
-// ============ ロガー (構造化ログ) ============
-const logger = {
-  debug: (msg, data) => console.log(`[DEBUG] ${msg}`, data || ''),
-  info: (msg, data) => console.log(`[INFO] ${msg}`, data || ''),
-  warn: (msg, data) => console.warn(`[WARN] ${msg}`, data || ''),
-  error: (msg, data) => console.error(`[ERROR] ${msg}`, data || '')
-};
+// テクニカル分析モジュールをインポート
+import { analyzeSymbol } from './analytics/technical-analyzer.js';
 
-// ============ 標準レスポンス形式 ============
-const successResponse = (data, message = 'Success') => ({
-  success: true,
-  message,
-  data,
-  timestamp: new Date().toISOString()
-});
+let specifications = {};
 
-const errorResponse = (error, statusCode = 500) => ({
-  success: false,
-  error: error.message || error,
-  statusCode,
-  timestamp: new Date().toISOString()
-});
-
-// ============ バリデーション ============
-const validateSymbol = (symbol) => {
-  if (!symbol) return { valid: false, error: 'Symbol is required' };
-  if (typeof symbol !== 'string') return { valid: false, error: 'Symbol must be string' };
-  if (symbol.length > 10) return { valid: false, error: 'Symbol too long' };
-  if (!/^[A-Z0-9]+$/.test(symbol.toUpperCase())) return { valid: false, error: 'Invalid symbol format' };
-  return { valid: true };
-};
-
-// ============ 初期化 ============
-let specifications = null;
-
-(async () => {
+// 仕様書を magi-stg から読み込む
+async function loadSpecifications() {
   try {
-    specifications = await loadSpecifications();
-    logger.info('✅ Specifications loaded successfully');
-  } catch (e) {
-    logger.warn('⚠️ Specification loading failed', e.message);
-  }
-})();
-
-// ============ ミドルウェア ============
-app.use(express.json({ limit: "50mb" }));
-
-// CORS
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  if (req.method === 'OPTIONS') return res.sendStatus(200);
-  next();
-});
-
-// リクエストログ
-app.use((req, res, next) => {
-  logger.debug(`${req.method} ${req.path}`);
-  next();
-});
-
-// ============ 銘柄データ ============
-const stockData = {
-  "AAPL": { company: "Apple Inc.", recommendation: "BUY", confidence: 0.85 },
-  "GOOGL": { company: "Alphabet Inc.", recommendation: "HOLD", confidence: 0.72 },
-  "MSFT": { company: "Microsoft Corp.", recommendation: "BUY", confidence: 0.88 },
-  "TSLA": { company: "Tesla Inc.", recommendation: "HOLD", confidence: 0.65 },
-  "NVDA": { company: "NVIDIA Corp.", recommendation: "BUY", confidence: 0.92 },
-  "META": { company: "Meta Platforms", recommendation: "HOLD", confidence: 0.68 },
-  "AMZN": { company: "Amazon.com Inc.", recommendation: "BUY", confidence: 0.80 }
-};
-
-// ============ API エンドポイント ============
-
-// Health Check
-app.get("/health", (req, res) => {
-  try {
-    res.json(successResponse({ status: "healthy" }, "Health check passed"));
-  } catch (e) {
-    logger.error('Health check failed', e.message);
-    res.status(500).json(errorResponse(e, 500));
-  }
-});
-
-// Status
-app.get("/status", (req, res) => {
-  try {
-    res.json(successResponse({
-      server: "MAGI Analytics Center",
-      port: PORT,
-      specifications_loaded: !!specifications,
-      uptime: process.uptime()
-    }));
-  } catch (e) {
-    logger.error('Status endpoint failed', e.message);
-    res.status(500).json(errorResponse(e, 500));
-  }
-});
-
-// 銘柄分析
-app.post("/api/analyze", (req, res) => {
-  try {
-    const { symbol } = req.body;
+    console.log('📚 Loading specifications from magi-stg...');
+    const response = await fetch('https://magi-stg-dtrah63zyq-an.a.run.app/api/specs');
+    const data = await response.json();
     
-    // バリデーション
-    const validation = validateSymbol(symbol);
-    if (!validation.valid) {
-      logger.warn('Validation failed', validation.error);
-      return res.status(400).json(errorResponse(validation.error, 400));
+    if (data.specs) {
+      specifications = data.specs;
+      console.log(`[INFO] ✅ Specifications loaded successfully`);
     }
-    
-    const upperSymbol = symbol.toUpperCase();
-    const data = stockData[upperSymbol] || {
-      company: `${upperSymbol} Inc.`,
-      recommendation: "HOLD",
-      confidence: 0.50
-    };
-    
-    logger.info(`Analysis completed for ${upperSymbol}`);
-    res.json(successResponse({
-      symbol: upperSymbol,
-      company: data.company,
-      consensus: {
-        recommendation: data.recommendation,
-        confidence: data.confidence
-      },
-      spec_context_used: !!specifications
-    }, 'Analysis successful'));
-    
-  } catch (e) {
-    logger.error('Analysis endpoint error', e.message);
-    res.status(500).json(errorResponse(e, 500));
+  } catch (error) {
+    console.error('[ERROR] Failed to load specifications:', error.message);
   }
-});
+}
 
-// ============ エラーハンドリング ============
-app.use((err, req, res, next) => {
-  logger.error('Unhandled error', err.message);
-  res.status(500).json(errorResponse(err, 500));
-});
-
-app.use((req, res) => {
-  logger.warn('404 Not Found', req.path);
-  res.status(404).json(errorResponse('Endpoint not found', 404));
-});
-
-// ============ サーバー起動 ============
-const server = app.listen(PORT, () => {
-  logger.info(`✅ MAGI Analytics Center running on port ${PORT}`);
-});
-
-// グレースフルシャットダウン
-process.on('SIGTERM', () => {
-  logger.info('SIGTERM received, shutting down...');
-  server.close(() => {
-    logger.info('Server closed');
-    process.exit(0);
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'ok', 
+    service: 'magi-ac', 
+    timestamp: new Date().toISOString() 
   });
 });
 
-export default app;
+app.post('/api/analyze', async (req, res) => {
+  const { symbol } = req.body;
+  
+  if (!symbol) {
+    return res.status(400).json({ error: 'Symbol required' });
+  }
+
+  try {
+    // テクニカル分析を実行
+    const technicalAnalysis = await analyzeSymbol(symbol);
+    
+    // 既存のレスポンス（AI合議）
+    const response = {
+      success: true,
+      symbol: symbol.toUpperCase(),
+      technical: technicalAnalysis,
+      timestamp: new Date().toISOString()
+    };
+    
+    res.json(response);
+  } catch (error) {
+    console.error('[ERROR] Analysis error:', error.message);
+    res.status(500).json({ 
+      error: error.message,
+      symbol 
+    });
+  }
+});
+
+// テクニカル分析テスト用エンドポイント
+app.get('/api/technical/:symbol', async (req, res) => {
+  try {
+    const { symbol } = req.params;
+    const technicalData = await analyzeSymbol(symbol);
+    res.json({
+      symbol,
+      technical: technicalData,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+const PORT = process.env.PORT || 8888;
+
+await loadSpecifications();
+
+app.listen(PORT, () => {
+  console.log(`[INFO] ✅ MAGI Analytics Center running on port ${PORT}`);
+});
