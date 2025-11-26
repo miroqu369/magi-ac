@@ -3,6 +3,9 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fetch from 'node-fetch';
 import fs from 'fs';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -12,6 +15,7 @@ app.use(express.json());
 
 // テクニカル分析モジュールをインポート
 import { analyzeSymbol } from './analytics/technical-analyzer.js';
+import { analyzeWithConsensus } from './analytics/ai-consensus.js';
 
 let specifications = {};
 
@@ -19,74 +23,89 @@ let specifications = {};
 async function loadSpecifications() {
   try {
     console.log('📚 Loading specifications from magi-stg...');
-    const response = await fetch('https://magi-stg-dtrah63zyq-an.a.run.app/api/specs');
-    const data = await response.json();
-    
-    if (data.specs) {
-      specifications = data.specs;
-      console.log(`[INFO] ✅ Specifications loaded successfully`);
-    }
+    const res = await fetch('https://magi-stg-dtrah63zyq-an.a.run.app/api/specs');
+    specifications = await res.json();
+    console.log('[INFO] Specifications loaded successfully');
   } catch (error) {
     console.error('[ERROR] Failed to load specifications:', error.message);
   }
 }
 
+loadSpecifications();
+
+// ヘルスチェック
 app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'ok', 
-    service: 'magi-ac', 
-    timestamp: new Date().toISOString() 
-  });
+  res.json({ status: 'ok', service: 'magi-ac', timestamp: new Date().toISOString() });
 });
 
+// 銘柄分析（テクニカル指標）
 app.post('/api/analyze', async (req, res) => {
-  const { symbol } = req.body;
-  
-  if (!symbol) {
-    return res.status(400).json({ error: 'Symbol required' });
-  }
-
   try {
-    // テクニカル分析を実行
-    const technicalAnalysis = await analyzeSymbol(symbol);
+    const { symbol } = req.body;
+    if (!symbol) {
+      return res.status(400).json({ error: 'Symbol is required' });
+    }
     
-    // 既存のレスポンス（AI合議）
-    const response = {
+    const technical = await analyzeSymbol(symbol);
+    
+    res.json({
       success: true,
       symbol: symbol.toUpperCase(),
-      technical: technicalAnalysis,
+      technical,
       timestamp: new Date().toISOString()
-    };
-    
-    res.json(response);
-  } catch (error) {
-    console.error('[ERROR] Analysis error:', error.message);
-    res.status(500).json({ 
-      error: error.message,
-      symbol 
     });
+  } catch (error) {
+    console.error('[Analyze] Error:', error.message);
+    res.status(500).json({ error: error.message });
   }
 });
 
-// テクニカル分析テスト用エンドポイント
+// テクニカル分析（GET）
 app.get('/api/technical/:symbol', async (req, res) => {
   try {
     const { symbol } = req.params;
-    const technicalData = await analyzeSymbol(symbol);
+    const technical = await analyzeSymbol(symbol);
+    
     res.json({
-      symbol,
-      technical: technicalData,
+      symbol: symbol.toUpperCase(),
+      technical,
       timestamp: new Date().toISOString()
     });
   } catch (error) {
+    console.error('[Technical] Error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 4AI合議エンドポイント
+app.post('/api/ai-consensus', async (req, res) => {
+  try {
+    const { symbol } = req.body;
+    if (!symbol) {
+      return res.status(400).json({ error: 'Symbol is required' });
+    }
+    console.log('[AI-Consensus] Request for ' + symbol);
+    
+    // まずテクニカル分析を実行
+    const technical = await analyzeSymbol(symbol);
+    
+    // 4AI合議分析を実行
+    const consensus = await analyzeWithConsensus(symbol, technical);
+    
+    res.json({
+      success: true,
+      symbol: symbol.toUpperCase(),
+      technical,
+      aiConsensus: consensus,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('[AI-Consensus] Error:', error.message);
     res.status(500).json({ error: error.message });
   }
 });
 
 const PORT = process.env.PORT || 8888;
-
-await loadSpecifications();
-
 app.listen(PORT, () => {
   console.log(`[INFO] ✅ MAGI Analytics Center running on port ${PORT}`);
 });
