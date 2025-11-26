@@ -1,7 +1,6 @@
 import express from 'express';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
-import fetch from 'node-fetch';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -16,6 +15,7 @@ app.use(express.json({ limit: '10mb' }));
 import { analyzeSymbol } from './analytics/technical-analyzer.js';
 import { analyzeWithConsensus } from './analytics/ai-consensus.js';
 import { bigQueryStorage } from '../storage/bigquery.js';
+import { documentStorage } from '../storage/document-storage.js';
 import { extractFinancials, analyzeSentiment, summarizeDocument } from '../collectors/cohere.js';
 
 // ヘルスチェック
@@ -125,7 +125,7 @@ app.get('/api/history/detail/:analysisId', async (req, res) => {
   }
 });
 
-// ===== Cohere 文書解析エンドポイント =====
+// ===== Cohere 文書解析エンドポイント（Storage + BigQuery保存付き）=====
 
 // 決算書から財務数値を抽出
 app.post('/api/document/extract-financials', async (req, res) => {
@@ -137,6 +137,11 @@ app.post('/api/document/extract-financials', async (req, res) => {
     console.log('[Cohere] Extract financials for ' + symbol);
     
     const result = await extractFinancials(text, symbol);
+    
+    // Storage + BigQueryに保存（非同期）
+    documentStorage.saveDocumentAnalysis(symbol, 'financials', result, text)
+      .catch(err => console.error('[DocumentStorage] Save failed:', err.message));
+    
     res.json(result);
   } catch (error) {
     console.error('[Cohere Extract] Error:', error.message);
@@ -154,6 +159,11 @@ app.post('/api/document/sentiment', async (req, res) => {
     console.log('[Cohere] Sentiment analysis for ' + symbol);
     
     const result = await analyzeSentiment(text, symbol);
+    
+    // Storage + BigQueryに保存（非同期）
+    documentStorage.saveDocumentAnalysis(symbol, 'sentiment', result, text)
+      .catch(err => console.error('[DocumentStorage] Save failed:', err.message));
+    
     res.json(result);
   } catch (error) {
     console.error('[Cohere Sentiment] Error:', error.message);
@@ -171,9 +181,35 @@ app.post('/api/document/summarize', async (req, res) => {
     console.log('[Cohere] Summarize document for ' + symbol);
     
     const result = await summarizeDocument(text, symbol);
+    
+    // Storage + BigQueryに保存（非同期）
+    documentStorage.saveDocumentAnalysis(symbol, 'summary', result, text)
+      .catch(err => console.error('[DocumentStorage] Save failed:', err.message));
+    
     res.json(result);
   } catch (error) {
     console.error('[Cohere Summarize] Error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 文書解析履歴取得
+app.get('/api/document/history/:symbol', async (req, res) => {
+  try {
+    const { symbol } = req.params;
+    const type = req.query.type || null;  // sentiment, financials, summary
+    const limit = parseInt(req.query.limit) || 20;
+    
+    const history = await documentStorage.getDocumentHistory(symbol, type, limit);
+    res.json({
+      success: true,
+      symbol: symbol.toUpperCase(),
+      count: history.length,
+      history,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('[Document History] Error:', error.message);
     res.status(500).json({ error: error.message });
   }
 });
@@ -183,4 +219,5 @@ app.listen(PORT, () => {
   console.log(`[INFO] ✅ MAGI Analytics Center running on port ${PORT}`);
   console.log(`[INFO] 📊 BigQuery integration enabled`);
   console.log(`[INFO] 📄 Cohere document analysis enabled`);
+  console.log(`[INFO] 💾 Cloud Storage integration enabled`);
 });
