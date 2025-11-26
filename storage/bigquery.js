@@ -1,4 +1,4 @@
-const { BigQuery } = require('@google-cloud/bigquery');
+import { BigQuery } from '@google-cloud/bigquery';
 
 class BigQueryStorage {
   constructor() {
@@ -8,111 +8,106 @@ class BigQueryStorage {
     this.dataset = this.bigquery.dataset('magi_ac');
   }
 
-  // 分析結果を保存
-  async saveAnalysis(data) {
+  // 4AI合議結果を保存
+  async saveConsensusAnalysis(symbol, technical, aiConsensus) {
     try {
-      const analysisId = `${data.symbol}_${Date.now()}`;
-      const timestamp = new BigQuery.timestamp(new Date());
+      const analysisId = `${symbol}_${Date.now()}`;
+      const timestamp = new Date().toISOString();
 
-      // 分析結果テーブルに挿入
+      // analyses テーブルに挿入
       const analysisRow = {
         analysis_id: analysisId,
-        symbol: data.symbol,
-        company_name: data.company,
+        symbol: symbol.toUpperCase(),
+        company_name: technical.company || '',
         analyzed_at: timestamp,
-        stock_price: data.financialData.currentPrice || null,
-        market_cap: data.financialData.marketCap || null,
-        pe_ratio: data.financialData.pe || null,
-        final_recommendation: this.extractRecommendation(data.analysis),
-        final_analysis: data.analysis.substring(0, 5000) // 最大5000文字
+        stock_price: parseFloat(technical.currentPrice) || null,
+        market_cap: null,
+        pe_ratio: null,
+        final_recommendation: aiConsensus.consensus.recommendation,
+        final_analysis: JSON.stringify(aiConsensus.consensus)
       };
 
       await this.dataset.table('analyses').insert([analysisRow]);
-      console.log(`✅ Analysis saved to BigQuery: ${analysisId}`);
+      console.log(`[BigQuery] ✅ Analysis saved: ${analysisId}`);
 
-      // AI判断テーブルに挿入
-      if (data.aiRecommendations && data.aiRecommendations.length > 0) {
-        const judgmentRows = data.aiRecommendations.map(ai => ({
+      // ai_judgments テーブルに挿入
+      const judgmentRows = aiConsensus.aiAnalysis
+        .filter(ai => ai.action && !ai.error)
+        .map(ai => ({
           judgment_id: `${analysisId}_${ai.provider}`,
           analysis_id: analysisId,
           ai_provider: ai.provider,
-          magi_unit: ai.magi_unit,
+          magi_unit: ai.role || '',
           action: ai.action,
-          confidence: ai.confidence,
-          reasoning: ai.text.substring(0, 5000),
+          confidence: ai.confidence || 0,
+          reasoning: (ai.reasoning || '').substring(0, 5000),
           judged_at: timestamp
         }));
 
+      if (judgmentRows.length > 0) {
         await this.dataset.table('ai_judgments').insert(judgmentRows);
-        console.log(`✅ ${judgmentRows.length} AI judgments saved to BigQuery`);
+        console.log(`[BigQuery] ✅ ${judgmentRows.length} AI judgments saved`);
       }
 
       return analysisId;
-
     } catch (error) {
-      console.error('BigQuery save error:', error);
-      throw error;
+      console.error('[BigQuery] Save error:', error.message);
+      // エラーでもAPIは継続
+      return null;
     }
-  }
-
-  // 最終推奨を抽出
-  extractRecommendation(text) {
-    if (text.match(/推奨.*買い|判断.*買い/i)) return 'BUY';
-    if (text.match(/推奨.*売り|判断.*売り/i)) return 'SELL';
-    if (text.match(/推奨.*保有|判断.*保有/i)) return 'HOLD';
-    return 'UNKNOWN';
   }
 
   // 分析履歴を取得
   async getAnalysisHistory(symbol, limit = 10) {
-    const query = `
-      SELECT 
-        analysis_id,
-        symbol,
-        company_name,
-        analyzed_at,
-        stock_price,
-        final_recommendation,
-        final_analysis
-      FROM \`screen-share-459802.magi_ac.analyses\`
-      WHERE symbol = @symbol
-      ORDER BY analyzed_at DESC
-      LIMIT @limit
-    `;
+    try {
+      const query = `
+        SELECT 
+          a.analysis_id,
+          a.symbol,
+          a.company_name,
+          a.analyzed_at,
+          a.stock_price,
+          a.final_recommendation,
+          a.final_analysis
+        FROM \`screen-share-459802.magi_ac.analyses\` a
+        WHERE a.symbol = @symbol
+        ORDER BY a.analyzed_at DESC
+        LIMIT @limit
+      `;
 
-    const options = {
-      query: query,
-      params: { symbol: symbol, limit: limit }
-    };
+      const [rows] = await this.bigquery.query({
+        query,
+        params: { symbol: symbol.toUpperCase(), limit }
+      });
 
-    const [rows] = await this.bigquery.query(options);
-    return rows;
+      return rows;
+    } catch (error) {
+      console.error('[BigQuery] Query error:', error.message);
+      return [];
+    }
   }
 
-  // AI判断の統計を取得
-  async getAIStatistics(symbol) {
-    const query = `
-      SELECT 
-        ai_provider,
-        action,
-        COUNT(*) as count,
-        AVG(confidence) as avg_confidence
-      FROM \`screen-share-459802.magi_ac.ai_judgments\` aj
-      JOIN \`screen-share-459802.magi_ac.analyses\` a
-        ON aj.analysis_id = a.analysis_id
-      WHERE a.symbol = @symbol
-      GROUP BY ai_provider, action
-      ORDER BY ai_provider, action
-    `;
+  // AI判断詳細を取得
+  async getJudgmentDetails(analysisId) {
+    try {
+      const query = `
+        SELECT *
+        FROM \`screen-share-459802.magi_ac.ai_judgments\`
+        WHERE analysis_id = @analysisId
+        ORDER BY ai_provider
+      `;
 
-    const options = {
-      query: query,
-      params: { symbol: symbol }
-    };
+      const [rows] = await this.bigquery.query({
+        query,
+        params: { analysisId }
+      });
 
-    const [rows] = await this.bigquery.query(options);
-    return rows;
+      return rows;
+    } catch (error) {
+      console.error('[BigQuery] Query error:', error.message);
+      return [];
+    }
   }
 }
 
-module.exports = BigQueryStorage;
+export const bigQueryStorage = new BigQueryStorage();
