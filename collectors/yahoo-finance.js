@@ -164,6 +164,56 @@ function calculateSMA(data, period) {
   return parseFloat((sum / period).toFixed(2));
 }
 
+/**
+ * 分足データ取得 (1分・5分・15分)
+ */
+export async function getIntradayData(symbol, interval = '1m', days = 1) {
+  try {
+    console.log(`[YAHOO] Fetching ${interval} intraday data for ${symbol}`);
+    
+    const validIntervals = ['1m', '2m', '5m', '15m', '30m', '60m'];
+    if (!validIntervals.includes(interval)) {
+      throw new Error(`Invalid interval: ${interval}`);
+    }
+    
+    const endDate = Math.floor(Date.now() / 1000);
+    const startDate = endDate - (days * 24 * 60 * 60);
+    
+    const response = await axios.get(`${YAHOO_CHART_API}/${symbol}`, {
+      params: {
+        period1: startDate,
+        period2: endDate,
+        interval: interval
+      },
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+      },
+      timeout: 15000
+    });
+
+    const result = response.data?.chart?.result?.[0];
+    if (!result) {
+      throw new Error('No chart data');
+    }
+
+    const timestamps = result.timestamp;
+    const quotes = result.indicators.quote[0];
+    
+    return timestamps.map((ts, i) => ({
+      timestamp: new Date(ts * 1000).toISOString(),
+      open: quotes.open[i],
+      high: quotes.high[i],
+      low: quotes.low[i],
+      close: quotes.close[i],
+      volume: quotes.volume[i]
+    })).filter(d => d.close !== null);
+
+  } catch (error) {
+    console.error(`[YAHOO] Intraday data failed for ${symbol}:`, error.message);
+    return generateMockIntradayData(interval, days);
+  }
+}
+
 function generateMockHistoricalData(days) {
   const data = [];
   let price = 150;
@@ -178,6 +228,29 @@ function generateMockHistoricalData(days) {
       low: price * 0.98,
       close: price,
       volume: Math.floor(Math.random() * 10000000)
+    });
+  }
+  return data;
+}
+
+function generateMockIntradayData(interval, days) {
+  const data = [];
+  let price = 150;
+  const minutesPerDay = 390; // 市場開場時間 (6.5時間)
+  const intervalMinutes = parseInt(interval);
+  const pointsPerDay = minutesPerDay / intervalMinutes;
+  const totalPoints = pointsPerDay * days;
+  
+  for (let i = 0; i < totalPoints; i++) {
+    const timestamp = new Date(Date.now() - (totalPoints - i) * intervalMinutes * 60 * 1000);
+    price += (Math.random() - 0.5) * 2;
+    data.push({
+      timestamp: timestamp.toISOString(),
+      open: price,
+      high: price * 1.005,
+      low: price * 0.995,
+      close: price,
+      volume: Math.floor(Math.random() * 100000)
     });
   }
   return data;
