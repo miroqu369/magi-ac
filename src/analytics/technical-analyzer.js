@@ -1,17 +1,13 @@
 import YahooFinance from 'yahoo-finance2';
 
-// インスタンスを作成
 const yahooFinance = new YahooFinance();
 
-// Yahoo Finance からデータ取得
 async function getStockData(symbol) {
   try {
     console.log(`[YahooFinance] データ取得開始: ${symbol}`);
     
-    // 現在の株価
     const quote = await yahooFinance.quote(symbol);
     
-    // 過去30日の履歴データ
     const endDate = new Date();
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - 45);
@@ -46,7 +42,6 @@ async function getStockData(symbol) {
   }
 }
 
-// RSI計算（14期間）
 function calculateRSI(closes, period = 14) {
   if (closes.length < period + 1) return 50;
   
@@ -65,7 +60,6 @@ function calculateRSI(closes, period = 14) {
   return 100 - (100 / (1 + rs));
 }
 
-// MACD計算
 function calculateMACD(closes) {
   const ema12 = calculateEMA(closes, 12);
   const ema26 = calculateEMA(closes, 26);
@@ -78,7 +72,6 @@ function calculateMACD(closes) {
   };
 }
 
-// EMA計算
 function calculateEMA(data, period) {
   if (data.length < period) return data[data.length - 1] || 0;
   const k = 2 / (period + 1);
@@ -89,7 +82,6 @@ function calculateEMA(data, period) {
   return ema;
 }
 
-// ボリンジャーバンド計算
 function calculateBollingerBands(closes, period = 20) {
   if (closes.length < period) {
     const price = closes[closes.length - 1] || 100;
@@ -108,7 +100,6 @@ function calculateBollingerBands(closes, period = 20) {
   };
 }
 
-// シグナル判定
 function getSignals(rsi, macd, bb, currentPrice) {
   let rsiSignal = 'NEUTRAL';
   if (rsi < 30) rsiSignal = 'OVERSOLD';
@@ -123,7 +114,6 @@ function getSignals(rsi, macd, bb, currentPrice) {
   return { rsiSignal, bbSignal, macdSignal };
 }
 
-// メイン分析関数
 export async function analyzeSymbol(symbol) {
   const data = await getStockData(symbol);
   

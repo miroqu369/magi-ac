@@ -1,29 +1,20 @@
 import express from 'express';
-import { fileURLToPath } from 'url';
-import { dirname } from 'path';
 import dotenv from 'dotenv';
-
-dotenv.config();
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
-const app = express();
-app.use(express.json({ limit: '10mb' }));
-
-// モジュールをインポート
 import { analyzeSymbol } from './analytics/technical-analyzer.js';
 import { analyzeWithConsensus } from './analytics/ai-consensus.js';
 import { bigQueryStorage } from '../storage/bigquery.js';
 import { documentStorage } from '../storage/document-storage.js';
 import { extractFinancials, analyzeSentiment, summarizeDocument } from '../collectors/cohere.js';
 
-// ヘルスチェック
+dotenv.config();
+
+const app = express();
+app.use(express.json({ limit: '10mb' }));
+
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', service: 'magi-ac', timestamp: new Date().toISOString() });
 });
 
-// テクニカル分析（POST）
 app.post('/api/analyze', async (req, res) => {
   try {
     const { symbol } = req.body;
@@ -43,7 +34,6 @@ app.post('/api/analyze', async (req, res) => {
   }
 });
 
-// テクニカル分析（GET）
 app.get('/api/technical/:symbol', async (req, res) => {
   try {
     const { symbol } = req.params;
@@ -59,7 +49,6 @@ app.get('/api/technical/:symbol', async (req, res) => {
   }
 });
 
-// 4AI合議エンドポイント（BigQuery保存付き）
 app.post('/api/ai-consensus', async (req, res) => {
   try {
     const { symbol } = req.body;
@@ -71,7 +60,6 @@ app.post('/api/ai-consensus', async (req, res) => {
     const technical = await analyzeSymbol(symbol);
     const consensus = await analyzeWithConsensus(symbol, technical);
     
-    // BigQueryに保存（非同期）
     bigQueryStorage.saveConsensusAnalysis(symbol, technical, consensus)
       .catch(err => console.error('[BigQuery] Background save failed:', err.message));
     
@@ -88,7 +76,6 @@ app.post('/api/ai-consensus', async (req, res) => {
   }
 });
 
-// 分析履歴取得
 app.get('/api/history/:symbol', async (req, res) => {
   try {
     const { symbol } = req.params;
@@ -107,7 +94,6 @@ app.get('/api/history/:symbol', async (req, res) => {
   }
 });
 
-// AI判断詳細取得
 app.get('/api/history/detail/:analysisId', async (req, res) => {
   try {
     const { analysisId } = req.params;
@@ -125,9 +111,8 @@ app.get('/api/history/detail/:analysisId', async (req, res) => {
   }
 });
 
-// ===== Cohere 文書解析エンドポイント（Storage + BigQuery保存付き）=====
+// Document API endpoints
 
-// 決算書から財務数値を抽出
 app.post('/api/document/extract-financials', async (req, res) => {
   try {
     const { text, symbol } = req.body;
@@ -138,7 +123,6 @@ app.post('/api/document/extract-financials', async (req, res) => {
     
     const result = await extractFinancials(text, symbol);
     
-    // Storage + BigQueryに保存（非同期）
     documentStorage.saveDocumentAnalysis(symbol, 'financials', result, text)
       .catch(err => console.error('[DocumentStorage] Save failed:', err.message));
     
@@ -149,7 +133,6 @@ app.post('/api/document/extract-financials', async (req, res) => {
   }
 });
 
-// センチメント分析
 app.post('/api/document/sentiment', async (req, res) => {
   try {
     const { text, symbol } = req.body;
@@ -160,7 +143,6 @@ app.post('/api/document/sentiment', async (req, res) => {
     
     const result = await analyzeSentiment(text, symbol);
     
-    // Storage + BigQueryに保存（非同期）
     documentStorage.saveDocumentAnalysis(symbol, 'sentiment', result, text)
       .catch(err => console.error('[DocumentStorage] Save failed:', err.message));
     
@@ -171,7 +153,6 @@ app.post('/api/document/sentiment', async (req, res) => {
   }
 });
 
-// 文書要約
 app.post('/api/document/summarize', async (req, res) => {
   try {
     const { text, symbol } = req.body;
@@ -182,7 +163,6 @@ app.post('/api/document/summarize', async (req, res) => {
     
     const result = await summarizeDocument(text, symbol);
     
-    // Storage + BigQueryに保存（非同期）
     documentStorage.saveDocumentAnalysis(symbol, 'summary', result, text)
       .catch(err => console.error('[DocumentStorage] Save failed:', err.message));
     
@@ -193,7 +173,6 @@ app.post('/api/document/summarize', async (req, res) => {
   }
 });
 
-// 文書解析履歴取得
 app.get('/api/document/history/:symbol', async (req, res) => {
   try {
     const { symbol } = req.params;
@@ -214,10 +193,4 @@ app.get('/api/document/history/:symbol', async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 8888;
-app.listen(PORT, () => {
-  console.log(`[INFO] ✅ MAGI Analytics Center running on port ${PORT}`);
-  console.log(`[INFO] 📊 BigQuery integration enabled`);
-  console.log(`[INFO] 📄 Cohere document analysis enabled`);
-  console.log(`[INFO] 💾 Cloud Storage integration enabled`);
-});
+export default app;
