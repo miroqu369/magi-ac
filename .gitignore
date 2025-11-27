@@ -12,6 +12,10 @@ npm-debug.log*
 
 # Backups
 *.backup
+*.bak
+*.old
+*-backup
+.env.bak
 
 # OS
 .DS_Store

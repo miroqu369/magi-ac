@@ -30,9 +30,7 @@ function createPrompt(symbol, data, perspective) {
 }
 
 function parseAIResponse(content) {
-  // 制御文字と改行を正規化
   let cleaned = content.replace(/[\x00-\x1F\x7F]/g, ' ').replace(/\s+/g, ' ');
-  // JSONを抽出
   const match = cleaned.match(/\{[^{}]*"action"[^{}]*\}/);
   if (match) {
     return JSON.parse(match[0]);
