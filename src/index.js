@@ -1,5 +1,6 @@
 import express from 'express';
 import dotenv from 'dotenv';
+
 import { analyzeSymbol } from './analytics/technical-analyzer.js';
 import { analyzeWithConsensus } from './analytics/ai-consensus.js';
 import { bigQueryStorage } from '../storage/bigquery.js';
@@ -111,7 +112,7 @@ app.get('/api/history/detail/:analysisId', async (req, res) => {
   }
 });
 
-// Document API endpoints
+// Document Analysis API Endpoints
 
 app.post('/api/document/extract-financials', async (req, res) => {
   try {
