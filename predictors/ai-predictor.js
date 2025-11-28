@@ -334,7 +334,13 @@ function parseAIPredictionResponse(content, aiName) {
   try {
     const jsonMatch = content.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
-      const parsed = JSON.parse(jsonMatch[0]);
+      // 制御文字を除去（\u0000-\u001F: 制御文字、\u007F: DEL）
+      let cleanJson = jsonMatch[0].replace(/[\u0000-\u001F\u007F]/g, ' ');
+      
+      // JSON内の改行を空白に置換
+      cleanJson = cleanJson.replace(/\n/g, ' ').replace(/\r/g, ' ');
+      
+      const parsed = JSON.parse(cleanJson);
       
       // バリデーション
       if (typeof parsed.predicted_price === 'number' &&

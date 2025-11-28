@@ -1,7 +1,4 @@
-import axios from 'axios';
-
-const YAHOO_FINANCE_API = 'https://query2.finance.yahoo.com/v10/finance/quoteSummary';
-const YAHOO_CHART_API = 'https://query2.finance.yahoo.com/v8/finance/chart';
+import yahooFinance from 'yahoo-finance2';
 
 const getMockQuote = (symbol) => ({
   shortName: `${symbol} Inc.`,
@@ -17,45 +14,43 @@ const getMockQuote = (symbol) => ({
   fiftyDayAverage: Math.random() * 200 + 50,
   twoHundredDayAverage: Math.random() * 200 + 50,
   fiftyTwoWeekHigh: Math.random() * 250 + 100,
-  fiftyTwoWeekLow: Math.random() * 100 + 30
+  fiftyTwoWeekLow: Math.random() * 100 + 30,
+  regularMarketVolume: Math.floor(Math.random() * 100000000),
+  averageVolume: Math.floor(Math.random() * 100000000)
 });
 
 export async function getStockQuote(symbol) {
   try {
     console.log(`[YAHOO] Fetching quote for ${symbol}`);
     
-    const response = await axios.get(YAHOO_FINANCE_API + '/' + symbol, {
-      params: {
-        modules: 'price,summaryDetail,defaultKeyStatistics,financialData'
-      },
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
-      },
-      timeout: 10000
+    // Use yahoo-finance2 quoteSummary
+    const result = await yahooFinance.quoteSummary(symbol, {
+      modules: ['price', 'summaryDetail', 'defaultKeyStatistics', 'financialData']
     });
-
-    if (response.data?.quoteSummary?.result?.[0]) {
-      const result = response.data.quoteSummary.result[0];
-      
-      return {
-        shortName: result.price?.shortName,
-        longName: result.price?.longName,
-        regularMarketPrice: result.price?.regularMarketPrice?.raw,
-        regularMarketPreviousClose: result.price?.regularMarketPreviousClose?.raw,
-        marketCap: result.price?.marketCap?.raw,
-        trailingPE: result.summaryDetail?.trailingPE?.raw,
-        epsTrailingTwelveMonths: result.defaultKeyStatistics?.trailingEps?.raw,
-        totalRevenue: result.financialData?.totalRevenue?.raw,
-        profitMargins: result.financialData?.profitMargins?.raw,
-        debtToEquity: result.financialData?.debtToEquity?.raw,
-        fiftyDayAverage: result.summaryDetail?.fiftyDayAverage?.raw,
-        twoHundredDayAverage: result.summaryDetail?.twoHundredDayAverage?.raw,
-        fiftyTwoWeekHigh: result.summaryDetail?.fiftyTwoWeekHigh?.raw,
-        fiftyTwoWeekLow: result.summaryDetail?.fiftyTwoWeekLow?.raw
-      };
-    }
-
-    throw new Error('No data in response');
+    
+    const price = result.price;
+    const summaryDetail = result.summaryDetail;
+    const keyStats = result.defaultKeyStatistics;
+    const financial = result.financialData;
+    
+    return {
+      shortName: price?.shortName || price?.longName,
+      longName: price?.longName || price?.shortName,
+      regularMarketPrice: price?.regularMarketPrice,
+      regularMarketPreviousClose: price?.regularMarketPreviousClose,
+      marketCap: price?.marketCap,
+      trailingPE: summaryDetail?.trailingPE,
+      epsTrailingTwelveMonths: keyStats?.trailingEps,
+      totalRevenue: financial?.totalRevenue,
+      profitMargins: financial?.profitMargins,
+      debtToEquity: financial?.debtToEquity,
+      fiftyDayAverage: summaryDetail?.fiftyDayAverage,
+      twoHundredDayAverage: summaryDetail?.twoHundredDayAverage,
+      fiftyTwoWeekHigh: summaryDetail?.fiftyTwoWeekHigh,
+      fiftyTwoWeekLow: summaryDetail?.fiftyTwoWeekLow,
+      regularMarketVolume: price?.regularMarketVolume,
+      averageVolume: summaryDetail?.averageVolume || summaryDetail?.averageDailyVolume10Day
+    };
 
   } catch (error) {
     console.error(`[YAHOO] API failed for ${symbol}:`, error.message);
@@ -64,52 +59,48 @@ export async function getStockQuote(symbol) {
   }
 }
 
-export async function getHistoricalData(symbol, days = 100) {
+export async function getHistoricalData(symbol, period = '60d') {
   try {
-    console.log(`[YAHOO] Fetching ${days} days historical data for ${symbol}`);
+    console.log(`[YAHOO] Fetching historical data for ${symbol} (${period})`);
     
-    const endDate = Math.floor(Date.now() / 1000);
-    const startDate = endDate - (days * 24 * 60 * 60);
+    // Convert period string to date range
+    const endDate = new Date();
+    const startDate = new Date();
     
-    const response = await axios.get(`${YAHOO_CHART_API}/${symbol}`, {
-      params: {
-        period1: startDate,
-        period2: endDate,
-        interval: '1d'
-      },
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
-      },
-      timeout: 15000
+    const periodNum = parseInt(period);
+    startDate.setDate(startDate.getDate() - periodNum);
+    
+    // Use yahoo-finance2 chart method
+    const result = await yahooFinance.chart(symbol, {
+      period1: startDate,
+      period2: endDate,
+      interval: '1d'
     });
-
-    const result = response.data?.chart?.result?.[0];
-    if (!result) {
-      throw new Error('No chart data');
-    }
-
-    const timestamps = result.timestamp;
-    const quotes = result.indicators.quote[0];
     
-    return timestamps.map((ts, i) => ({
-      date: new Date(ts * 1000).toISOString().split('T')[0],
-      open: quotes.open[i],
-      high: quotes.high[i],
-      low: quotes.low[i],
-      close: quotes.close[i],
-      volume: quotes.volume[i]
-    })).filter(d => d.close !== null);
+    if (!result || !result.quotes || result.quotes.length === 0) {
+      throw new Error('No historical data');
+    }
+    
+    return result.quotes.map(q => ({
+      date: q.date.toISOString().split('T')[0],
+      open: q.open,
+      high: q.high,
+      low: q.low,
+      close: q.close,
+      volume: q.volume
+    }));
 
   } catch (error) {
     console.error(`[YAHOO] Historical data failed for ${symbol}:`, error.message);
-    return generateMockHistoricalData(days);
+    const periodNum = parseInt(period) || 60;
+    return generateMockHistoricalData(periodNum);
   }
 }
 
 export async function getComprehensiveData(symbol) {
   const [quote, historical] = await Promise.all([
     getStockQuote(symbol),
-    getHistoricalData(symbol, 100)
+    getHistoricalData(symbol, '100d')
   ]);
 
   const indicators = calculateIndicators(historical);
@@ -171,42 +162,34 @@ export async function getIntradayData(symbol, interval = '1m', days = 1) {
   try {
     console.log(`[YAHOO] Fetching ${interval} intraday data for ${symbol}`);
     
-    const validIntervals = ['1m', '2m', '5m', '15m', '30m', '60m'];
+    const validIntervals = ['1m', '2m', '5m', '15m', '30m', '60m', '90m', '1h'];
     if (!validIntervals.includes(interval)) {
       throw new Error(`Invalid interval: ${interval}`);
     }
     
-    const endDate = Math.floor(Date.now() / 1000);
-    const startDate = endDate - (days * 24 * 60 * 60);
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
     
-    const response = await axios.get(`${YAHOO_CHART_API}/${symbol}`, {
-      params: {
-        period1: startDate,
-        period2: endDate,
-        interval: interval
-      },
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
-      },
-      timeout: 15000
+    // Use yahoo-finance2 chart method
+    const result = await yahooFinance.chart(symbol, {
+      period1: startDate,
+      period2: endDate,
+      interval: interval
     });
-
-    const result = response.data?.chart?.result?.[0];
-    if (!result) {
-      throw new Error('No chart data');
-    }
-
-    const timestamps = result.timestamp;
-    const quotes = result.indicators.quote[0];
     
-    return timestamps.map((ts, i) => ({
-      timestamp: new Date(ts * 1000).toISOString(),
-      open: quotes.open[i],
-      high: quotes.high[i],
-      low: quotes.low[i],
-      close: quotes.close[i],
-      volume: quotes.volume[i]
-    })).filter(d => d.close !== null);
+    if (!result || !result.quotes || result.quotes.length === 0) {
+      throw new Error('No intraday data');
+    }
+    
+    return result.quotes.map(q => ({
+      timestamp: q.date.toISOString(),
+      open: q.open,
+      high: q.high,
+      low: q.low,
+      close: q.close,
+      volume: q.volume
+    }));
 
   } catch (error) {
     console.error(`[YAHOO] Intraday data failed for ${symbol}:`, error.message);
