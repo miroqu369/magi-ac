@@ -20,8 +20,9 @@ import { getShortTrend, detectShortAnomalies } from '../collectors/finra-shorts.
 import { getDarkPoolData, getWeeklyDarkPoolStats, detectDarkPoolAnomalies } from '../collectors/finra-darkpool.js';
 import { analyzeInstitutionalFlow, analyzeDarkPoolActivity, classifyInstitutionalBehavior } from '../analyzers/institutional-flow.js';
 import { analyzeWithAIConsensus, quickAIAnalysis } from '../ai/manipulation-detector.js';
-import { saveManipulationSignals, saveAIAnalysis, saveInstitutionalPositions, getManipulationHistory, getAIAnalysisHistory, getHighRiskAlerts, getStatsSummary, initializeIAATables } from '../bigquery/iaa-storage.js';
+import { saveManipulationSignals, saveAIAnalysis, saveInstitutionalPositions, getManipulationHistory, getAIAnalysisHistory, getHighRiskAlerts, getStatsSummary, initializeIAATables, savePrediction, getPredictionHistory, analyzePredictionAccuracy, initializePredictionsTable } from '../bigquery/iaa-storage.js';
 import { checkAlertConditions, recordAlert, getActiveAlerts, getAlertSummary, analyzeTrend, addToWatchlist, removeFromWatchlist, getWatchlist, startMonitoring, stopMonitoring, getAlertConfig, updateAlertConfig } from '../utils/alert-system.js';
+import { predictStockPrice, predictMultipleStocks } from '../analyzers/prediction-engine.js';
 
 dotenv.config();
 
@@ -1149,10 +1150,179 @@ app.post('/api/admin/init-iaa-tables', async (req, res) => {
   }
 });
 
+// ==================== PREDICTION ENDPOINTS ====================
+
+/**
+ * POST /api/predict
+ * AI株価予測（単一銘柄）
+ */
+app.post('/api/predict', async (req, res) => {
+  try {
+    const { symbol, horizon = '3months', enableAI = false } = req.body;
+    
+    if (!symbol) {
+      return res.status(400).json({ error: 'Symbol is required' });
+    }
+
+    // horizon バリデーション
+    const validHorizons = ['1day', '1week', '1month', '3months', '2years'];
+    if (!validHorizons.includes(horizon)) {
+      return res.status(400).json({ 
+        error: 'Invalid horizon',
+        valid_horizons: validHorizons 
+      });
+    }
+
+    console.log(`[PREDICT] Starting prediction for ${symbol} (${horizon}, AI=${enableAI})`);
+
+    // 予測実行
+    const prediction = await predictStockPrice(symbol, horizon, enableAI);
+
+    // BigQueryに保存
+    if (process.env.BIGQUERY_ENABLED === 'true') {
+      try {
+        await savePrediction(prediction);
+      } catch (error) {
+        console.warn('[PREDICT] Failed to save to BigQuery:', error.message);
+      }
+    }
+
+    res.json({
+      success: true,
+      data: prediction
+    });
+
+  } catch (error) {
+    console.error('[PREDICT] Error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/predict/batch
+ * バッチ予測（複数銘柄）
+ */
+app.post('/api/predict/batch', async (req, res) => {
+  try {
+    const { symbols, horizon = '3months', enableAI = false } = req.body;
+    
+    if (!symbols || !Array.isArray(symbols) || symbols.length === 0) {
+      return res.status(400).json({ error: 'Symbols array is required' });
+    }
+
+    if (symbols.length > 10) {
+      return res.status(400).json({ error: 'Maximum 10 symbols allowed per request' });
+    }
+
+    console.log(`[PREDICT BATCH] Starting batch prediction for ${symbols.length} symbols`);
+
+    const predictions = await predictMultipleStocks(symbols, horizon, enableAI);
+
+    // BigQueryに保存
+    if (process.env.BIGQUERY_ENABLED === 'true') {
+      for (const prediction of predictions) {
+        if (!prediction.error) {
+          try {
+            await savePrediction(prediction);
+          } catch (error) {
+            console.warn(`[PREDICT BATCH] Failed to save ${prediction.symbol}:`, error.message);
+          }
+        }
+      }
+    }
+
+    res.json({
+      success: true,
+      total: predictions.length,
+      successful: predictions.filter(p => !p.error).length,
+      failed: predictions.filter(p => p.error).length,
+      data: predictions
+    });
+
+  } catch (error) {
+    console.error('[PREDICT BATCH] Error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/predict/history/:symbol
+ * 予測履歴を取得
+ */
+app.get('/api/predict/history/:symbol', async (req, res) => {
+  try {
+    const { symbol } = req.params;
+    const { horizon, days = 30 } = req.query;
+
+    console.log(`[PREDICT HISTORY] Fetching history for ${symbol}`);
+
+    const history = await getPredictionHistory(symbol, horizon, parseInt(days));
+
+    res.json({
+      success: true,
+      symbol,
+      horizon: horizon || 'all',
+      days: parseInt(days),
+      count: history.length,
+      data: history
+    });
+
+  } catch (error) {
+    console.error('[PREDICT HISTORY] Error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/predict/accuracy/:symbol
+ * 予測精度を分析
+ */
+app.get('/api/predict/accuracy/:symbol', async (req, res) => {
+  try {
+    const { symbol } = req.params;
+    const { horizon = '1day', days = 30 } = req.query;
+
+    console.log(`[PREDICT ACCURACY] Analyzing accuracy for ${symbol}`);
+
+    const accuracy = await analyzePredictionAccuracy(symbol, horizon, parseInt(days));
+
+    res.json({
+      success: true,
+      symbol,
+      horizon,
+      days: parseInt(days),
+      data: accuracy
+    });
+
+  } catch (error) {
+    console.error('[PREDICT ACCURACY] Error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/admin/init-predictions-table
+ * 予測テーブル初期化
+ */
+app.post('/api/admin/init-predictions-table', async (req, res) => {
+  try {
+    console.log('[ADMIN] Initializing predictions table...');
+    await initializePredictionsTable();
+    res.json({
+      success: true,
+      message: 'Predictions table initialized successfully'
+    });
+  } catch (error) {
+    console.error('[ADMIN] Predictions table initialization failed:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`
 ╔═══════════════════════════════════════╗
-║   MAGI Analytics Center v3.1         ║
+║   MAGI Analytics Center v3.2         ║
+║   AI Stock Price Prediction          ║
 ║   Port: ${PORT}                          ║
 ║   Status: Running                     ║
 ╚═══════════════════════════════════════╝

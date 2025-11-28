@@ -10,6 +10,7 @@ const DATASET_ID = 'magi_ac';
 const MANIPULATION_SIGNALS_TABLE = 'manipulation_signals';
 const AI_ANALYSES_TABLE = 'ai_analyses';
 const INSTITUTIONAL_POSITIONS_TABLE = 'institutional_positions';
+const PREDICTIONS_TABLE = 'predictions';
 
 /**
  * 操作シグナルをBigQueryに保存
@@ -364,6 +365,196 @@ export async function initializeIAATables() {
       return true;
     }
     console.error('[BIGQUERY] Failed to initialize tables:', error.message);
+    throw error;
+  }
+}
+
+/**
+ * 予測結果をBigQueryに保存
+ */
+export async function savePrediction(predictionData) {
+  try {
+    const { symbol, horizon, current_price, consensus, ai_predictions, technical_indicators } = predictionData;
+
+    const row = {
+      id: `${symbol}_${horizon}_${Date.now()}`,
+      symbol: symbol,
+      horizon: horizon,
+      timestamp: new BigQuery.timestamp(new Date()),
+      current_price: current_price,
+      
+      // コンセンサス
+      predicted_price: consensus.predicted_price,
+      price_change_percent: consensus.price_change_percent || 0,
+      direction: consensus.direction,
+      confidence: consensus.confidence,
+      upvotes: consensus.upvotes,
+      downvotes: consensus.downvotes,
+      neutral: consensus.neutral,
+      agreement_level: consensus.agreement_level,
+      
+      // AI予測（JSON）
+      ai_predictions: JSON.stringify(ai_predictions),
+      ai_responses: ai_predictions.length,
+      
+      // テクニカル指標
+      rsi: technical_indicators?.rsi || null,
+      macd: technical_indicators?.macd || null,
+      bb_position: technical_indicators?.bb_position || null,
+      trend: technical_indicators?.trend || null,
+      
+      created_at: new BigQuery.timestamp(new Date())
+    };
+
+    await bigquery
+      .dataset(DATASET_ID)
+      .table(PREDICTIONS_TABLE)
+      .insert([row]);
+
+    console.log(`[BIGQUERY] Saved prediction for ${symbol} (${horizon})`);
+    return row.id;
+
+  } catch (error) {
+    console.error('[BIGQUERY] Failed to save prediction:', error.message);
+    throw error;
+  }
+}
+
+/**
+ * 予測履歴を取得
+ */
+export async function getPredictionHistory(symbol, horizon = null, days = 30) {
+  let query = `
+    SELECT 
+      symbol,
+      horizon,
+      timestamp,
+      current_price,
+      predicted_price,
+      price_change_percent,
+      direction,
+      confidence,
+      upvotes,
+      downvotes,
+      neutral,
+      agreement_level,
+      ai_responses,
+      rsi,
+      macd,
+      trend
+    FROM \`${DATASET_ID}.${PREDICTIONS_TABLE}\`
+    WHERE symbol = @symbol
+      AND timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @days DAY)
+  `;
+
+  const params = { symbol, days };
+
+  if (horizon) {
+    query += ` AND horizon = @horizon`;
+    params.horizon = horizon;
+  }
+
+  query += ` ORDER BY timestamp DESC LIMIT 100`;
+
+  const options = { query, params };
+
+  try {
+    const [rows] = await bigquery.query(options);
+    return rows;
+  } catch (error) {
+    console.error('[BIGQUERY] Query prediction history failed:', error.message);
+    throw error;
+  }
+}
+
+/**
+ * 予測精度を分析（実際の価格と比較）
+ */
+export async function analyzePredictionAccuracy(symbol, horizon = '1day', days = 30) {
+  const query = `
+    WITH predictions AS (
+      SELECT 
+        symbol,
+        horizon,
+        timestamp,
+        current_price,
+        predicted_price,
+        price_change_percent
+      FROM \`${DATASET_ID}.${PREDICTIONS_TABLE}\`
+      WHERE symbol = @symbol
+        AND horizon = @horizon
+        AND timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @days DAY)
+    )
+    SELECT 
+      COUNT(*) as total_predictions,
+      AVG(price_change_percent) as avg_predicted_change,
+      STDDEV(price_change_percent) as stddev_predicted_change,
+      MIN(predicted_price) as min_predicted,
+      MAX(predicted_price) as max_predicted
+    FROM predictions
+  `;
+
+  const options = {
+    query,
+    params: { symbol, horizon, days }
+  };
+
+  try {
+    const [rows] = await bigquery.query(options);
+    return rows[0] || null;
+  } catch (error) {
+    console.error('[BIGQUERY] Query prediction accuracy failed:', error.message);
+    throw error;
+  }
+}
+
+/**
+ * 予測テーブルを初期化
+ */
+export async function initializePredictionsTable() {
+  const dataset = bigquery.dataset(DATASET_ID);
+
+  const predictionsSchema = [
+    { name: 'id', type: 'STRING', mode: 'REQUIRED' },
+    { name: 'symbol', type: 'STRING', mode: 'REQUIRED' },
+    { name: 'horizon', type: 'STRING', mode: 'REQUIRED' },
+    { name: 'timestamp', type: 'TIMESTAMP', mode: 'REQUIRED' },
+    { name: 'current_price', type: 'FLOAT64', mode: 'REQUIRED' },
+    { name: 'predicted_price', type: 'FLOAT64', mode: 'REQUIRED' },
+    { name: 'price_change_percent', type: 'FLOAT64', mode: 'NULLABLE' },
+    { name: 'direction', type: 'STRING', mode: 'REQUIRED' },
+    { name: 'confidence', type: 'FLOAT64', mode: 'REQUIRED' },
+    { name: 'upvotes', type: 'INT64', mode: 'REQUIRED' },
+    { name: 'downvotes', type: 'INT64', mode: 'REQUIRED' },
+    { name: 'neutral', type: 'INT64', mode: 'REQUIRED' },
+    { name: 'agreement_level', type: 'FLOAT64', mode: 'REQUIRED' },
+    { name: 'ai_predictions', type: 'STRING', mode: 'NULLABLE' },
+    { name: 'ai_responses', type: 'INT64', mode: 'REQUIRED' },
+    { name: 'rsi', type: 'FLOAT64', mode: 'NULLABLE' },
+    { name: 'macd', type: 'FLOAT64', mode: 'NULLABLE' },
+    { name: 'bb_position', type: 'FLOAT64', mode: 'NULLABLE' },
+    { name: 'trend', type: 'STRING', mode: 'NULLABLE' },
+    { name: 'created_at', type: 'TIMESTAMP', mode: 'REQUIRED' }
+  ];
+
+  try {
+    await dataset.table(PREDICTIONS_TABLE).create({
+      schema: predictionsSchema,
+      timePartitioning: {
+        type: 'DAY',
+        field: 'timestamp'
+      }
+    });
+
+    console.log(`[BIGQUERY] Created table: ${PREDICTIONS_TABLE}`);
+    return true;
+
+  } catch (error) {
+    if (error.code === 409) {
+      console.log(`[BIGQUERY] Table ${PREDICTIONS_TABLE} already exists`);
+      return true;
+    }
+    console.error('[BIGQUERY] Failed to create predictions table:', error.message);
     throw error;
   }
 }
