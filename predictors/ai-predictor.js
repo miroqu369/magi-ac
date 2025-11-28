@@ -120,6 +120,7 @@ export async function getGrokPrediction(symbol, stockData, technicalData, horizo
       return null;
     }
 
+    const cleanApiKey = apiKey.trim();
     console.log(`[GROK PREDICTOR] Getting prediction for ${symbol} (${horizon})`);
 
     const prompt = generatePromptForHorizon(symbol, stockData, technicalData, horizon);
@@ -143,7 +144,7 @@ export async function getGrokPrediction(symbol, stockData, technicalData, horizo
       },
       {
         headers: {
-          'Authorization': `Bearer ${apiKey}`,
+          'Authorization': 'Bearer ' + cleanApiKey,
           'Content-Type': 'application/json'
         },
         timeout: 20000
@@ -221,6 +222,7 @@ export async function getClaudePrediction(symbol, stockData, technicalData, hori
       return null;
     }
 
+    const cleanApiKey = apiKey.trim();
     console.log(`[CLAUDE PREDICTOR] Getting prediction for ${symbol} (${horizon})`);
 
     const prompt = generatePromptForHorizon(symbol, stockData, technicalData, horizon);
@@ -240,7 +242,7 @@ export async function getClaudePrediction(symbol, stockData, technicalData, hori
       },
       {
         headers: {
-          'x-api-key': apiKey,
+          'x-api-key': cleanApiKey,
           'anthropic-version': '2023-06-01',
           'Content-Type': 'application/json'
         },
@@ -270,6 +272,13 @@ export async function getMistralPrediction(symbol, stockData, technicalData, hor
       return null;
     }
 
+    // Trim and validate API key
+    const cleanApiKey = apiKey.trim();
+    if (!cleanApiKey) {
+      console.warn('[MISTRAL PREDICTOR] API key is empty after trim');
+      return null;
+    }
+
     console.log(`[MISTRAL PREDICTOR] Getting prediction for ${symbol} (${horizon})`);
 
     const prompt = generatePromptForHorizon(symbol, stockData, technicalData, horizon);
@@ -293,7 +302,7 @@ export async function getMistralPrediction(symbol, stockData, technicalData, hor
       },
       {
         headers: {
-          'Authorization': `Bearer ${apiKey}`,
+          'Authorization': 'Bearer ' + cleanApiKey,
           'Content-Type': 'application/json'
         },
         timeout: 20000
@@ -307,6 +316,13 @@ export async function getMistralPrediction(symbol, stockData, technicalData, hor
 
   } catch (error) {
     console.error('[MISTRAL PREDICTOR] Error:', error.message);
+    if (error.response) {
+      console.error('[MISTRAL PREDICTOR] Response status:', error.response.status);
+      console.error('[MISTRAL PREDICTOR] Response data:', JSON.stringify(error.response.data));
+    }
+    if (error.config?.headers) {
+      console.error('[MISTRAL PREDICTOR] Request headers:', error.config.headers);
+    }
     return null;
   }
 }
