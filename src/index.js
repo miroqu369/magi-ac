@@ -71,6 +71,9 @@ app.post('/api/analyze', async (req, res) => {
 
     console.log(`[MAGI] Received ${aiRecommendations.length}/4 recommendations`);
     
+    // Calculate consensus
+    const consensus = calculateConsensus(aiRecommendations);
+    
     // Prepare analysis data
     const analysisData = {
       symbol: symbol.toUpperCase(),
@@ -86,7 +89,8 @@ app.post('/api/analyze', async (req, res) => {
         profitMargin: stockData.profitMargins,
         debtToEquity: stockData.debtToEquity
       },
-      aiRecommendations: aiRecommendations
+      aiRecommendations: aiRecommendations,
+      consensus: consensus
     };
 
     // Save to Cloud Storage
@@ -1317,6 +1321,43 @@ app.post('/api/admin/init-predictions-table', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+// ==================== HELPER FUNCTIONS ====================
+
+/**
+ * Calculate consensus from AI recommendations
+ */
+function calculateConsensus(recommendations) {
+  if (!recommendations || recommendations.length === 0) {
+    return null;
+  }
+  
+  const counts = { BUY: 0, HOLD: 0, SELL: 0 };
+  let totalConfidence = 0;
+  
+  recommendations.forEach(rec => {
+    const action = rec.action?.toUpperCase() || 'HOLD';
+    if (counts.hasOwnProperty(action)) {
+      counts[action]++;
+    }
+    totalConfidence += (rec.confidence || 0.5);
+  });
+  
+  // Find the action with most votes
+  const maxAction = Object.keys(counts).reduce((a, b) => 
+    counts[a] > counts[b] ? a : b
+  );
+  
+  return {
+    recommendation: maxAction,
+    buy: counts.BUY,
+    hold: counts.HOLD,
+    sell: counts.SELL,
+    average_confidence: recommendations.length > 0 
+      ? (totalConfidence / recommendations.length).toFixed(2) 
+      : 0
+  };
+}
 
 app.listen(PORT, () => {
   console.log(`
