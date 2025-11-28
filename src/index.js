@@ -97,6 +97,24 @@ app.post('/api/analyze', async (req, res) => {
     const storageUri = await saveToStorage(analysisData);
     console.log(`[STORAGE] Saved to: ${storageUri}`);
 
+    // Save to BigQuery
+    try {
+      await saveAIAnalysis(analysisData.symbol, {
+        date: new Date().toISOString().split('T')[0],
+        consensus_action: consensus?.recommendation || 'HOLD',
+        buy_count: consensus?.buy || 0,
+        hold_count: consensus?.hold || 0,
+        sell_count: consensus?.sell || 0,
+        average_confidence: parseFloat(consensus?.average_confidence || 0),
+        ai_recommendations: aiRecommendations,
+        timestamp: new Date().toISOString()
+      });
+      console.log(`[BIGQUERY] Saved analysis for ${analysisData.symbol}`);
+    } catch (bqError) {
+      console.error('[BIGQUERY] Save failed:', bqError.message);
+      // Continue processing even if BigQuery save fails
+    }
+
     res.json({
       ...analysisData,
       storageUri
