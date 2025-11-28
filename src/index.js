@@ -21,6 +21,7 @@ import { getDarkPoolData, getWeeklyDarkPoolStats, detectDarkPoolAnomalies } from
 import { analyzeInstitutionalFlow, analyzeDarkPoolActivity, classifyInstitutionalBehavior } from '../analyzers/institutional-flow.js';
 import { analyzeWithAIConsensus, quickAIAnalysis } from '../ai/manipulation-detector.js';
 import { saveManipulationSignals, saveAIAnalysis, saveInstitutionalPositions, getManipulationHistory, getAIAnalysisHistory, getHighRiskAlerts, getStatsSummary, initializeIAATables, savePrediction, getPredictionHistory, analyzePredictionAccuracy, initializePredictionsTable } from '../bigquery/iaa-storage.js';
+import { saveInvestmentAnalysis } from '../bigquery/analytics-storage.js';
 import { checkAlertConditions, recordAlert, getActiveAlerts, getAlertSummary, analyzeTrend, addToWatchlist, removeFromWatchlist, getWatchlist, startMonitoring, stopMonitoring, getAlertConfig, updateAlertConfig } from '../utils/alert-system.js';
 import { predictStockPrice, predictMultipleStocks } from '../analyzers/prediction-engine.js';
 
@@ -97,19 +98,15 @@ app.post('/api/analyze', async (req, res) => {
     const storageUri = await saveToStorage(analysisData);
     console.log(`[STORAGE] Saved to: ${storageUri}`);
 
-    // Save to BigQuery
+    // Save to BigQuery (investment analysis table)
     try {
-      await saveAIAnalysis(analysisData.symbol, {
-        date: new Date().toISOString().split('T')[0],
-        consensus_action: consensus?.recommendation || 'HOLD',
-        buy_count: consensus?.buy || 0,
-        hold_count: consensus?.hold || 0,
-        sell_count: consensus?.sell || 0,
-        average_confidence: parseFloat(consensus?.average_confidence || 0),
-        ai_recommendations: aiRecommendations,
-        timestamp: new Date().toISOString()
-      });
-      console.log(`[BIGQUERY] Saved analysis for ${analysisData.symbol}`);
+      await saveInvestmentAnalysis(
+        analysisData.symbol,
+        analysisData.company,
+        aiRecommendations,
+        consensus
+      );
+      console.log(`[BIGQUERY] Saved investment analysis for ${analysisData.symbol}`);
     } catch (bqError) {
       console.error('[BIGQUERY] Save failed:', bqError.message);
       // Continue processing even if BigQuery save fails
